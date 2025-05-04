@@ -1,0 +1,56 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# C extensions
+*.so
+
+# Virtual environments
+.venv/
+env/
+venv/
+ENV/
+
+# Distribution / packaging
+build/
+dist/
+*.egg-info/
+
+# PyInstaller
+*.spec
+
+# Logs and local debug artifacts
+*.log
+
+# Config and secrets
+.env
+*.env
+config.yaml  # If your config contains secrets; remove this line if you want to track it
+
+# VSCode settings
+.vscode/
+
+# macOS and Linux system files
+.DS_Store
+*.swp
+
+# Docker
+*.pid
+*.tar
+*.bak
+docker-compose.override.yml
+
+# GitHub Actions / workflows
+.github/workflows/*.secrets.yaml  # optional: ignore secrets templates
+.github/*.bak
+
+# Jupyter Notebook checkpoints (if used)
+.ipynb_checkpoints/
+
+# Test outputs
+htmlcov/
+.tox/
+.nox/
+coverage.*
+.pytest_cache/
