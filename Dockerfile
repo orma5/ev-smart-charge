@@ -8,7 +8,7 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 # Copy your script
-COPY your_script.py .
+COPY main.py .
 
 # Run script by default when container starts
-ENTRYPOINT ["python", "your_script.py"]
+ENTRYPOINT ["python", "main.py"]
