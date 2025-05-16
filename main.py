@@ -202,6 +202,24 @@ def get_charging_state():
 
     return state
 
+def get_battery_state():
+
+    state = ""
+
+    # Fetch smart charing state
+    url = f"{HA_BASE_URL}/states/{HA_EV_BATTERY_ENTITY}"
+    headers = {
+            "Authorization": f"Bearer {HA_TOKEN}",
+            "content-type": "application/json",
+        }
+
+    response = requests.get(url,headers=headers)
+    if response.status_code == 200:
+        data = response.json()
+        state = data.get("state")
+
+    return state
+
 def main():
     """
     Main function to execute the script.
@@ -222,10 +240,15 @@ def main():
         quit()
 
     charging_state = get_charging_state()
-
     if charging_state == "connect_cable":
         print("Cable not connected, aborted")
         quit()
+
+    battery_state = get_battery_state()
+    if int(battery_state) >= EV_CHARGE_LIMIT_PERCENT:
+        print("Battery fully charged, aborting")
+        quit()
+
 
     print(f"Current date is: {now}")
     # Check hours between now and next departure
