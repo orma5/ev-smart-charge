@@ -238,8 +238,9 @@ def main():
         quit()
 
     charging_state = get_charging_state()
-    if charging_state == "connect_cable":
-        print("Cable not connected, aborted")
+    connected_states = {"ready_for_charging", "conserving", "charging"}
+    if charging_state not in connected_states:
+        print(f"Charger not connected (state: '{charging_state}'), aborted")
         quit()
 
     battery_state = get_battery_state()
