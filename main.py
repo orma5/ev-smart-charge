@@ -9,36 +9,50 @@ from datetime import datetime, timedelta
 # these come from the CronJob's env and the ev-smart-charge Secret).
 load_dotenv()
 
-# Every call gets a timeout. Without one a single hung request hung the whole
-# run forever - and because cron triggered this with `docker start`, which is a
-# no-op on an already-running container, that silently stopped smart charging
-# until someone noticed the car was not full.
+# --- Rate limiting ----------------------------------------------------------
+# Skoda's public API allows 20 requests per hour per API key, shared across
+# reads AND commands, with no burst. That single number drives this whole
+# design. The CronJob runs every 4 minutes (15 polls/hour), which leaves 5 for
+# start/stop commands.
 #
-# The totals matter: this runs every minute, so a run must finish inside a
-# minute or it starts blocking its own successor. Worst case here is three HA
-# reads plus a switch call plus two price fetches - 40s, comfortably inside the
-# CronJob's 60s activeDeadlineSeconds.
+# The cost, stated plainly: the previous Home-Assistant-backed version ran every
+# minute, because the polling interval is how long the car may charge at an
+# expensive price after the cable is plugged in before anything can veto it. At
+# four minutes that exposure is ~0.7 kWh at 11 kW instead of ~0.2 kWh. Home
+# Assistant could do better only because it gets MQTT push from Skoda; this API
+# is poll-only.
+COMMAND_QUOTA_RESERVE = 2
+
+SKODA_TIMEOUT = 10  # Public internet.
 HA_TIMEOUT = 5      # Home Assistant is on the LAN.
-PRICE_TIMEOUT = 10  # The price API is on the public internet.
 
 SLOT_MINUTES = 15
 SLOTS_PER_HOUR = 60 // SLOT_MINUTES
 
-# Charger states that mean the cable is physically connected.
-CONNECTED_STATES = {"ready_for_charging", "conserving", "charging"}
+# The one charging state that means the cable is NOT in the car. Tested by
+# exclusion rather than by listing the connected states, because the spec warns
+# that new values may be added and clients must tolerate ones they do not know.
+# The previous version listed connected states explicitly and omitted
+# CHARGING_INTERRUPTED - plausibly what the car reports right after we stop it,
+# which would have read as "cable unplugged" and never resumed.
+CABLE_DISCONNECTED = "CONNECT_CABLE"
+
+
+class SkodaError(Exception):
+    """The car's state could not be read or a command could not be sent."""
+
+
+class RateLimited(SkodaError):
+    """The hourly request quota is exhausted."""
 
 
 class HomeAssistantError(Exception):
-    """Home Assistant could not be read, so the car's real state is unknown."""
+    """Home Assistant could not be read, so the override state is unknown."""
 
 
 def load_config():
     """
-    Read and validate configuration.
-
-    Reports *every* missing or malformed variable at once and names it. The
-    previous version did `int(os.getenv('DEPARTURE_HOUR'))` at import time, so a
-    missing variable surfaced as a bare TypeError with no clue which one it was.
+    Read and validate configuration, reporting every problem at once by name.
     """
     spec = {
         "PRICE_ZONE": str,
@@ -47,11 +61,14 @@ def load_config():
         "EV_CHARGER_SPEED_KW": float,
         "EV_BATTERY_CAPACITY_KWH": float,
         "EV_CHARGE_LIMIT_PERCENT": int,
+        "SKODA_API_BASE": str,
+        "SKODA_API_KEY": str,
+        "SKODA_VIN": str,
+        # Home Assistant is still consulted for exactly one thing: the manual
+        # override. It is a preference, not a property of the car, so the Skoda
+        # API has no equivalent. This costs nothing against the Skoda quota.
         "HA_BASE_URL": str,
         "HA_TOKEN": str,
-        "HA_EV_BATTERY_ENTITY": str,
-        "HA_EV_CHARGE_SWITCH": str,
-        "HA_EV_CHARGER_STATE": str,
         "HA_EV_SMART_CHARGING_BOOLEAN": str,
     }
 
@@ -87,13 +104,7 @@ def slot_start(moment):
 
 
 def next_departure(now, departure_hour):
-    """
-    The next datetime at which the car must be ready.
-
-    A departure hour that has already passed today means tomorrow. The old code
-    decided this twice, once with `>` and once with `>=`; at exactly the
-    departure hour the two disagreed and the slot count went negative.
-    """
+    """The next datetime at which the car must be ready."""
     departure = now.replace(hour=departure_hour, minute=0, second=0, microsecond=0)
     if departure <= now:
         departure += timedelta(days=1)
@@ -102,10 +113,8 @@ def next_departure(now, departure_hour):
 
 def slots_to_departure(now, departure_hour):
     """
-    How many 15-minute slots are usable before departure.
-
-    Counted from the start of the current slot, so the slot in progress counts
-    as available - matching the original behaviour.
+    How many 15-minute slots are usable before departure, counted from the start
+    of the current slot so the slot in progress counts as available.
     """
     remaining = next_departure(now, departure_hour) - slot_start(now)
     return int(remaining.total_seconds() // (SLOT_MINUTES * 60))
@@ -133,74 +142,134 @@ def should_charge_now(prices, now, departure, slots_needed):
     return any(p["time_start"] == current for p in cheapest_slots(prices, departure, slots_needed))
 
 
-# --- Home Assistant ---------------------------------------------------------
+def cable_connected(charging_state):
+    """True unless the car is asking for the cable to be plugged in."""
+    return charging_state != CABLE_DISCONNECTED
 
-def _ha_headers(token):
-    return {"Authorization": f"Bearer {token}", "content-type": "application/json"}
 
-
-def ha_state(config, entity):
+def read_charging(vehicle):
     """
-    Read one entity's state.
+    Pull the fields we care about out of a vehicle response.
 
-    Raises rather than returning "" on failure. The old code returned an empty
-    string, which `int()` then blew up on - and in the one path that swallowed
-    it, a Home Assistant blip made the script decide it needed 0 slots and
-    switch charging *off* on a car that should have been charging.
+    Returns (state, battery_percent, target_percent). target_percent is None when
+    the car does not report one, in which case the configured limit is used.
     """
-    url = f"{config['HA_BASE_URL']}/states/{entity}"
+    charging = (vehicle or {}).get("charging") or {}
+    status = charging.get("status") or {}
+    settings = charging.get("settings") or {}
+    battery = status.get("battery") or {}
+
+    state = status.get("state")
+    if not state:
+        raise SkodaError(f"no charging state in response (errors: {(vehicle or {}).get('errors')})")
+
+    percent = battery.get("stateOfChargeInPercent")
+    if percent is None:
+        raise SkodaError("no battery state of charge in response")
+
+    return state, int(percent), settings.get("targetStateOfChargeInPercent")
+
+
+# --- Skoda public API -------------------------------------------------------
+
+class Skoda:
+    """
+    Minimal client for the Skoda public API, tracking the hourly quota.
+
+    Every response carries RateLimit-Remaining. We keep the most recent value so
+    that a decision to send a command can check whether there is budget left,
+    rather than discovering it as a 429 at the worst possible moment.
+    """
+
+    def __init__(self, config):
+        self.base = config["SKODA_API_BASE"].rstrip("/")
+        self.vin = config["SKODA_VIN"]
+        self.headers = {"X-API-Key": config["SKODA_API_KEY"], "accept": "application/json"}
+        self.remaining = None
+
+    def _record_quota(self, response):
+        raw = response.headers.get("RateLimit-Remaining")
+        if raw is not None:
+            try:
+                self.remaining = int(raw)
+            except ValueError:
+                pass
+
+    def _request(self, method, path, **kwargs):
+        url = f"{self.base}{path}"
+        try:
+            response = requests.request(
+                method, url, headers=self.headers, timeout=SKODA_TIMEOUT, **kwargs
+            )
+        except requests.RequestException as exc:
+            raise SkodaError(f"could not reach the Skoda API ({method} {path}): {exc}") from exc
+
+        self._record_quota(response)
+
+        if response.status_code == 429:
+            reset = response.headers.get("RateLimit-Reset", "unknown")
+            raise RateLimited(f"hourly quota exhausted; resets in {reset}s")
+
+        # 202 Accepted is the success case for the command endpoints.
+        if response.status_code not in (200, 202):
+            raise SkodaError(f"{method} {path} returned {response.status_code}: {response.text[:200]}")
+
+        return response
+
+    def vehicle(self):
+        """Read the car. `include=charging` keeps the payload to what we use."""
+        response = self._request(
+            "GET", f"/api/v1/vehicles/{self.vin}", params={"include": "charging"}
+        )
+        return response.json()
+
+    def set_charging(self, to_state):
+        """
+        Start or stop charging.
+
+        The endpoint returns 202 Accepted: the car acts asynchronously, so this
+        returning does not mean charging has actually begun. Nothing here waits
+        for confirmation - checking would cost another request from the same
+        quota, and the next scheduled run reads the real state anyway.
+        """
+        if to_state not in ("ON", "OFF"):
+            print(f"Received unknown command for toggle charging: {to_state}")
+            return
+
+        action = "start" if to_state == "ON" else "stop"
+
+        if self.remaining is not None and self.remaining < 1:
+            raise RateLimited(f"no quota left to {action} charging")
+
+        self._request("POST", f"/api/v1/vehicles/{self.vin}/charging/{action}")
+        print(f"EV charging {action} requested (202 accepted, applied asynchronously)")
+
+
+# --- Home Assistant (override only) -----------------------------------------
+
+def smart_charging_enabled(config):
+    """
+    Read the manual override toggle.
+
+    Raises rather than assuming: if we cannot tell whether the user has disabled
+    smart charging, the safe move is to touch nothing.
+    """
+    url = f"{config['HA_BASE_URL']}/states/{config['HA_EV_SMART_CHARGING_BOOLEAN']}"
+    headers = {"Authorization": f"Bearer {config['HA_TOKEN']}", "content-type": "application/json"}
 
     try:
-        response = requests.get(url, headers=_ha_headers(config["HA_TOKEN"]), timeout=HA_TIMEOUT)
+        response = requests.get(url, headers=headers, timeout=HA_TIMEOUT)
     except requests.RequestException as exc:
-        raise HomeAssistantError(f"could not reach Home Assistant for {entity}: {exc}") from exc
+        raise HomeAssistantError(f"could not reach Home Assistant: {exc}") from exc
 
     if response.status_code != 200:
-        raise HomeAssistantError(f"Home Assistant returned {response.status_code} for {entity}")
+        raise HomeAssistantError(f"Home Assistant returned {response.status_code}")
 
     state = response.json().get("state")
-    # HA reports these literally when an integration is down or a device is
-    # asleep - they are not numbers and must not be treated as one.
     if state in (None, "", "unknown", "unavailable"):
-        raise HomeAssistantError(f"{entity} state is '{state}'")
+        raise HomeAssistantError(f"override state is '{state}'")
 
-    return state
-
-
-def ha_battery_percent(config):
-    state = ha_state(config, config["HA_EV_BATTERY_ENTITY"])
-    try:
-        return int(float(state))
-    except ValueError as exc:
-        raise HomeAssistantError(f"battery state {state!r} is not a number") from exc
-
-
-def toggle_charging(config, to_state):
-    """Turn the charger switch on or off."""
-    if to_state not in ("ON", "OFF"):
-        # Previously this branch was an `else` attached to the "OFF" test, so it
-        # fired on every successful "ON" - 196 bogus errors in the NUC's logs.
-        print(f"Received unknown command for toggle charging: {to_state}")
-        return
-
-    action = "turn_on" if to_state == "ON" else "turn_off"
-    verb = "started" if to_state == "ON" else "stopped"
-    url = f"{config['HA_BASE_URL']}/services/switch/{action}"
-
-    try:
-        response = requests.post(
-            url=url,
-            headers=_ha_headers(config["HA_TOKEN"]),
-            json={"entity_id": config["HA_EV_CHARGE_SWITCH"]},
-            timeout=HA_TIMEOUT,
-        )
-    except requests.RequestException as exc:
-        raise HomeAssistantError(f"could not reach Home Assistant to {action}: {exc}") from exc
-
-    if response.status_code == 200:
-        print(f"EV {verb} charging")
-    else:
-        print(f"Failed to {verb.replace('ed', '')} charging, response status: {response.status_code}")
+    return state == "on"
 
 
 # --- Prices -----------------------------------------------------------------
@@ -210,7 +279,7 @@ def _fetch_day(config, date, since=None):
     url = f"{config['PRICE_BASE_URL']}/{date:%Y}/{date:%m-%d}_{config['PRICE_ZONE']}.json"
 
     try:
-        response = requests.get(url, timeout=PRICE_TIMEOUT)
+        response = requests.get(url, timeout=SKODA_TIMEOUT)
     except requests.RequestException as exc:
         print(f"Could not fetch prices for {date:%Y-%m-%d}: {exc}")
         return []
@@ -228,12 +297,7 @@ def _fetch_day(config, date, since=None):
 
 
 def fetch_electricity_prices_from_date(config, date):
-    """
-    Today's remaining slots, plus tomorrow's once they are published.
-
-    Nord Pool publishes the next day in the early afternoon, so asking before
-    then just 404s.
-    """
+    """Today's remaining slots, plus tomorrow's once they are published."""
     print("Fetch electricity prices for today")
     prices = _fetch_day(config, date, since=date.replace(minute=0, second=0, microsecond=0))
 
@@ -250,28 +314,31 @@ def main():
     """
     Decide, from spot prices, whether the EV should be charging right now.
 
-    1. Bail out unless smart charging is on, the cable is connected, and the
-       battery is below the limit.
-    2. Work out how many 15-minute slots remain before departure, and how many
-       are needed to reach the charge limit.
-    3. If time is tight, charge now. Otherwise charge only during the cheapest
-       slots between now and departure.
+    The car is read from and commanded through Skoda's public API. Home
+    Assistant is consulted for one thing only: the manual override toggle.
     """
     print("** EV Smart charge run started **")
     config = load_config()
     now = datetime.now()
 
-    if not ha_state(config, config["HA_EV_SMART_CHARGING_BOOLEAN"]) == "on":
+    if not smart_charging_enabled(config):
         print("Smart charging disabled, aborting")
         return
 
-    charging_state = ha_state(config, config["HA_EV_CHARGER_STATE"])
-    if charging_state not in CONNECTED_STATES:
-        print(f"Charger not connected (state: '{charging_state}'), aborted")
+    skoda = Skoda(config)
+    state, battery_percent, target_percent = read_charging(skoda.vehicle())
+    print(f"Quota remaining this hour: {skoda.remaining}")
+
+    if not cable_connected(state):
+        print(f"Charger not connected (state: '{state}'), aborted")
         return
 
-    battery_percent = ha_battery_percent(config)
-    if battery_percent >= config["EV_CHARGE_LIMIT_PERCENT"]:
+    # The car's own target wins when it reports one - it is the value set in the
+    # MyŠkoda app, so there is one source of truth rather than two that drift.
+    limit_percent = target_percent if target_percent is not None else config["EV_CHARGE_LIMIT_PERCENT"]
+    print(f"Charging state: {state}, battery {battery_percent}%, target {limit_percent}%")
+
+    if battery_percent >= limit_percent:
         print("Battery fully charged, aborting")
         return
 
@@ -283,16 +350,18 @@ def main():
 
     slots_to_charge = slots_needed_to_charge(
         battery_percent,
-        config["EV_CHARGE_LIMIT_PERCENT"],
+        limit_percent,
         config["EV_BATTERY_CAPACITY_KWH"],
         config["EV_CHARGER_SPEED_KW"],
     )
     print(f"Number of 15-min slots needed to charge is: {slots_to_charge}")
 
+    charging_now = state == "CHARGING"
+
     if slots_available <= slots_to_charge:
         print("Too few slots available to smart charge, charging now")
-        if charging_state != "charging":
-            toggle_charging(config, "ON")
+        if not charging_now:
+            skoda.set_charging("ON")
         print("** EV Smart charge run ended **")
         return
 
@@ -307,13 +376,13 @@ def main():
 
     if should_charge_now(prices, now, departure, slots_to_charge):
         print("Current slot is cheap, start or continue charging")
-        if charging_state != "charging":
-            toggle_charging(config, "ON")
+        if not charging_now:
+            skoda.set_charging("ON")
     else:
         schedule = cheapest_slots(prices, departure, slots_to_charge)
         print(f"Current slot is not cheap, stop charging. Charging schedule is: {schedule} ")
-        if charging_state == "charging":
-            toggle_charging(config, "OFF")
+        if charging_now:
+            skoda.set_charging("OFF")
 
     print("** EV Smart charge run ended **")
 
@@ -321,8 +390,8 @@ def main():
 if __name__ == "__main__":
     try:
         main()
-    except HomeAssistantError as exc:
-        # Exit non-zero so a failed run is visible as a failed Job rather than
-        # looking like a successful decision to do nothing.
+    except (SkodaError, HomeAssistantError) as exc:
+        # Exit non-zero so a failed run is a failed Job rather than looking like
+        # a successful decision to do nothing.
         print(f"Aborting: {exc}")
         sys.exit(1)
