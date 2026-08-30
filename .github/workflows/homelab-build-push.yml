@@ -1,11 +1,42 @@
-name: Docker build and push
+name: Github actions CI/CD
 on: [push]
 
+# The homelab registry is the only image source. The GitHub repo name doubles
+# as the image name, so this needs no editing if the workflow is copied.
+env:
+  IMAGE: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_USER }}/${{ github.event.repository.name }}
+
 jobs:
+  # Runs first and without Docker: the decision logic is pure Python, so there
+  # is no reason to build an image before finding out the arithmetic is wrong.
+  test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.13'
+
+      - name: Install dev dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r dev-requirements.txt
+
+      - name: Run tests
+        run: pytest -q
+
   build:
     runs-on: ubuntu-latest
+    needs: test
+
     steps:
-      # 1. Login to YOUR Homelab Registry
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Login to Homelab Registry
         uses: docker/login-action@v3
         with:
@@ -13,13 +44,46 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
+      # arm64 emulation, for the k3s cluster (Raspberry Pi 5). Without this the
+      # image is amd64-only and the Pis cannot run it.
+      - name: Set up QEMU (arm64 emulation)
+        uses: docker/setup-qemu-action@v3
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
-      # 2. Build and Push with the Full Registry URL
+      - name: Set image tag
+        id: vars
+        run: echo "COMMIT_TAG=$IMAGE:gh-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
+
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           push: true
-          # The tag must be: registry.home.dkms.se/master/repo-name:latest
-          tags: ${{ secrets.REGISTRY_HOST }}/${{ secrets.REGISTRY_USER }}/${{ secrets.DOCKERHUB_REPO }}:latest
+          platforms: linux/amd64,linux/arm64
+          tags: ${{ steps.vars.outputs.COMMIT_TAG }}
+
+  # There is no deploy job on purpose. The CronJob in homebrain tracks :latest
+  # with imagePullPolicy: Always and runs every minute, so it picks this image
+  # up by itself within a minute. A CronJob has nothing to roll out, so there is
+  # nothing for CI to restart.
+  promote-latest:
+    runs-on: ubuntu-latest
+    needs: build
+    if: github.ref == 'refs/heads/main'
+
+    steps:
+      - name: Login to Homelab Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.REGISTRY_HOST }}
+          username: ${{ secrets.REGISTRY_USER }}
+          password: ${{ secrets.REGISTRY_PASSWORD }}
+
+      # imagetools copies the manifest list itself, so :latest stays multi-arch.
+      # A docker pull/tag/push would flatten it to the runner's amd64.
+      - name: Promote commit tag to :latest
+        run: |
+          docker buildx imagetools create \
+            --tag "$IMAGE:latest" \
+            "$IMAGE:gh-${GITHUB_SHA::7}"

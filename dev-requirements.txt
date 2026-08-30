@@ -1,0 +1,5 @@
+# Deliberately includes requirements.txt rather than restating its pins.
+# poapp duplicates every pin across the two files and they drift; this cannot.
+-r requirements.txt
+
+pytest==9.1.1
