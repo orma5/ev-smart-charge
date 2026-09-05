@@ -12,7 +12,16 @@ Home Assistant is used for exactly one thing: the manual override toggle (`input
 
 **Skoda's public API allows 20 requests per hour per API key, shared across reads *and* commands, with no burst — and it is poll-only, with no webhooks.** Check any new request against that budget before adding it. The CronJob runs every 4 minutes (15 polls/hour), leaving 5 for start/stop.
 
-The cadence is not about price resolution — prices move in 15-minute slots, so polling faster than that buys nothing there. It is about **detecting the cable being plugged in**: the car draws power the moment it is connected and this script is the only thing that can veto it, so the polling interval *is* the window of expensive charging.
+The cadence is not about price resolution — prices move in 15-minute slots, so polling faster than that buys nothing there. It is about **detecting the cable being plugged in**: the car draws power the moment it is connected and this script is the only thing that can veto it.
+
+But the polling interval is only half of that delay, and it is the smaller half. **The car reports to Skoda's cloud on its own schedule, and we read a snapshot.** Every response carries `carCapturedTimestamp` — the time the *car* last reported, not the time of the request. Measured on 2026-09-05:
+
+- **At rest, that snapshot goes stale for tens of minutes.** A parked, unplugged car sat at a 37-minute-old snapshot across repeated polls.
+- **A state change pushes promptly.** Plugging in moved the snapshot from 37 minutes old to *0.2 minutes* old, and it then refreshed every ~2-3 minutes while charging.
+
+So worst-case detection lag is the car's push (~3-4 minutes, measured) *plus* the poll interval (up to 4 minutes): call it **~8 minutes, or ~1.5 kWh at 11 kW**. Polling faster cannot fix the first term, which is why 4 minutes costs little despite sounding slow.
+
+This is not a regression from Home Assistant. HA's Skoda integration reads the same upstream snapshot — checked side by side, `sensor.skoda_enyaq_charging_state` was showing the identical 43-minute-old `connect_cable`. The previous every-minute cron was polling a value that only changes every ~30-40 minutes; its claimed ~0.18 kWh exposure was never real.
 
 ## How It Works
 

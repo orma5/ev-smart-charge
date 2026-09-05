@@ -15,13 +15,17 @@ load_dotenv()
 # design. The CronJob runs every 4 minutes (15 polls/hour), which leaves 5 for
 # start/stop commands.
 #
-# The cost, stated plainly: the previous Home-Assistant-backed version ran every
-# minute, because the polling interval is how long the car may charge at an
-# expensive price after the cable is plugged in before anything can veto it. At
-# four minutes that exposure is ~0.7 kWh at 11 kW instead of ~0.2 kWh. Home
-# Assistant could do better only because it gets MQTT push from Skoda; this API
-# is poll-only.
-COMMAND_QUOTA_RESERVE = 2
+# Four minutes sounds slow for catching the cable going in, but the poll interval
+# is the smaller half of that delay. We read a *snapshot*: carCapturedTimestamp
+# in every response is when the car last reported to Skoda's cloud, not when we
+# asked. Measured 2026-09-05: a parked car sat at a 37-minute-old snapshot, and
+# plugging in pushed a fresh one within ~3-4 minutes, after which it refreshed
+# every ~2-3 minutes while charging.
+#
+# So detection lag is the car's push plus our interval - about 8 minutes worst
+# case, ~1.5 kWh at 11 kW. Polling faster cannot shrink the first term. Home
+# Assistant was no better: its Skoda integration reads the same upstream
+# snapshot, and was observed showing the identical 43-minute-old state.
 
 SKODA_TIMEOUT = 10  # Public internet.
 HA_TIMEOUT = 5      # Home Assistant is on the LAN.
@@ -32,9 +36,12 @@ SLOTS_PER_HOUR = 60 // SLOT_MINUTES
 # The one charging state that means the cable is NOT in the car. Tested by
 # exclusion rather than by listing the connected states, because the spec warns
 # that new values may be added and clients must tolerate ones they do not know.
-# The previous version listed connected states explicitly and omitted
-# CHARGING_INTERRUPTED - plausibly what the car reports right after we stop it,
-# which would have read as "cable unplugged" and never resumed.
+#
+# Observed 2026-09-05: stopping a charge puts the car in READY_FOR_CHARGING, not
+# CHARGING_INTERRUPTED as was assumed here - so the old explicit list would in
+# fact have coped with that particular case. CHARGING_INTERRUPTED and
+# DISCHARGING are still unobserved; exclusion is what keeps them, and anything
+# added later, from reading as "cable unplugged" and never resuming.
 CABLE_DISCONNECTED = "CONNECT_CABLE"
 
 
@@ -147,21 +154,28 @@ def cable_connected(charging_state):
     return charging_state != CABLE_DISCONNECTED
 
 
-def read_charging(vehicle):
+def read_charging(payload):
     """
     Pull the fields we care about out of a vehicle response.
+
+    The car is wrapped in a top-level "vehicle" key, with any errors beside it
+    rather than inside it. Reading straight through to `charging` cost a live
+    smoke test to find: every mocked fixture had been built to the unwrapped
+    shape, so the whole suite passed against a payload the API never sends.
 
     Returns (state, battery_percent, target_percent). target_percent is None when
     the car does not report one, in which case the configured limit is used.
     """
-    charging = (vehicle or {}).get("charging") or {}
+    payload = payload or {}
+    vehicle = payload.get("vehicle") or {}
+    charging = vehicle.get("charging") or {}
     status = charging.get("status") or {}
     settings = charging.get("settings") or {}
     battery = status.get("battery") or {}
 
     state = status.get("state")
     if not state:
-        raise SkodaError(f"no charging state in response (errors: {(vehicle or {}).get('errors')})")
+        raise SkodaError(f"no charging state in response (errors: {payload.get('errors')})")
 
     percent = battery.get("stateOfChargeInPercent")
     if percent is None:

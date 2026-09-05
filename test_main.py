@@ -139,12 +139,31 @@ def test_unknown_states_are_treated_as_connected():
 # --- read_charging ----------------------------------------------------------
 
 def vehicle_payload(state="CHARGING", percent=55, target=80):
+    """
+    Shaped from a real response, not from the spec. The fields we ignore are kept
+    so the fixture stays recognisable against what the API actually returns - an
+    earlier version of this fixture omitted the "vehicle" envelope entirely and
+    every test passed against a payload that does not exist.
+    """
     return {
-        "vin": "TMBJC7NY2MF016495",
-        "charging": {
-            "status": {"state": state, "battery": {"stateOfChargeInPercent": percent}},
-            "settings": {"targetStateOfChargeInPercent": target},
-        },
+        "vehicle": {
+            "vin": "TMBJC7NY2MF016495",
+            "charging": {
+                "carCapturedTimestamp": "2026-09-05T11:41:09Z",
+                "status": {
+                    "state": state,
+                    "chargePowerInKw": 0.0,
+                    "battery": {
+                        "stateOfChargeInPercent": percent,
+                        "remainingCruisingRangeInMeters": 159000,
+                    },
+                },
+                "settings": {
+                    "targetStateOfChargeInPercent": target,
+                    "maxChargeCurrentAc": "MAXIMUM",
+                },
+            },
+        }
     }
 
 
@@ -154,19 +173,21 @@ def test_read_charging_extracts_the_three_fields():
 
 def test_read_charging_allows_a_missing_target():
     payload = vehicle_payload()
-    del payload["charging"]["settings"]["targetStateOfChargeInPercent"]
+    del payload["vehicle"]["charging"]["settings"]["targetStateOfChargeInPercent"]
     assert main.read_charging(payload) == ("CHARGING", 55, None)
 
 
 def test_read_charging_raises_when_charging_is_absent():
     """A vehicle response can omit `charging` entirely and report it in errors."""
     with pytest.raises(main.SkodaError):
-        main.read_charging({"vin": "x", "errors": [{"type": "CHARGING_UNSUPPORTED"}]})
+        main.read_charging(
+            {"vehicle": {"vin": "x"}, "errors": [{"type": "CHARGING_UNSUPPORTED"}]}
+        )
 
 
 def test_read_charging_raises_when_battery_is_absent():
     payload = vehicle_payload()
-    payload["charging"]["status"]["battery"] = {}
+    payload["vehicle"]["charging"]["status"]["battery"] = {}
     with pytest.raises(main.SkodaError):
         main.read_charging(payload)
 
@@ -181,7 +202,7 @@ def test_vehicle_records_remaining_quota(monkeypatch):
     monkeypatch.setattr(main.requests, "request", fake)
     skoda = main.Skoda(CONFIG)
 
-    assert skoda.vehicle()["vin"] == "TMBJC7NY2MF016495"
+    assert skoda.vehicle()["vehicle"]["vin"] == "TMBJC7NY2MF016495"
     assert skoda.remaining == 14
 
 
