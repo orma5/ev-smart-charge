@@ -215,6 +215,53 @@ def test_429_raises_rate_limited(monkeypatch):
         main.Skoda(CONFIG).vehicle()
 
 
+def test_a_connection_error_is_retried_then_succeeds(monkeypatch):
+    calls = []
+
+    def flaky(method, url, **kwargs):
+        calls.append(method)
+        if len(calls) == 1:
+            raise main.requests.ConnectionError("Failed to resolve host")
+        return FakeResponse(200, vehicle_payload(), {"RateLimit-Remaining": "18"})
+
+    monkeypatch.setattr(main.requests, "request", flaky)
+    monkeypatch.setattr(main.time, "sleep", lambda seconds: None)
+    skoda = main.Skoda(CONFIG)
+
+    assert skoda.vehicle()["vehicle"]["vin"] == "TMBJC7NY2MF016495"
+    assert len(calls) == 2
+
+
+def test_a_connection_error_gives_up_after_the_last_attempt(monkeypatch):
+    calls = []
+
+    def always_fails(method, url, **kwargs):
+        calls.append(method)
+        raise main.requests.ConnectionError("Failed to resolve host")
+
+    monkeypatch.setattr(main.requests, "request", always_fails)
+    monkeypatch.setattr(main.time, "sleep", lambda seconds: None)
+
+    with pytest.raises(main.SkodaError):
+        main.Skoda(CONFIG).vehicle()
+    assert len(calls) == main.CONNECT_ATTEMPTS
+
+
+def test_a_read_timeout_is_not_retried(monkeypatch):
+    """A timeout may already have been applied and charged against the quota."""
+    calls = []
+
+    def times_out(method, url, **kwargs):
+        calls.append(method)
+        raise main.requests.ReadTimeout("too slow")
+
+    monkeypatch.setattr(main.requests, "request", times_out)
+
+    with pytest.raises(main.SkodaError):
+        main.Skoda(CONFIG).vehicle()
+    assert len(calls) == 1
+
+
 def test_command_accepts_202(monkeypatch, capsys):
     monkeypatch.setattr(
         main.requests, "request",

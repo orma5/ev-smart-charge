@@ -1,6 +1,7 @@
 import math
 import os
 import sys
+import time
 import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
@@ -29,6 +30,13 @@ load_dotenv()
 
 SKODA_TIMEOUT = 10  # Public internet.
 HA_TIMEOUT = 5      # Home Assistant is on the LAN.
+
+# Cluster DNS resolution of the Skoda hostname fails intermittently (EAI_AGAIN,
+# a few runs an hour), and one bad lookup used to lose the whole run. Two
+# attempts fit inside the Job's 60s activeDeadlineSeconds alongside everything
+# else the run does.
+CONNECT_ATTEMPTS = 2
+CONNECT_RETRY_DELAY = 2
 
 SLOT_MINUTES = 15
 SLOTS_PER_HOUR = 60 // SLOT_MINUTES
@@ -211,12 +219,25 @@ class Skoda:
 
     def _request(self, method, path, **kwargs):
         url = f"{self.base}{path}"
-        try:
-            response = requests.request(
-                method, url, headers=self.headers, timeout=SKODA_TIMEOUT, **kwargs
-            )
-        except requests.RequestException as exc:
-            raise SkodaError(f"could not reach the Skoda API ({method} {path}): {exc}") from exc
+        # Only a ConnectionError is retried: it means the request never reached
+        # Skoda, so it cost no quota and re-sending cannot duplicate a command.
+        # Anything else - a read timeout above all - may already have been
+        # applied, and retrying it would spend a second request from the 20.
+        for attempt in range(1, CONNECT_ATTEMPTS + 1):
+            try:
+                response = requests.request(
+                    method, url, headers=self.headers, timeout=SKODA_TIMEOUT, **kwargs
+                )
+                break
+            except requests.ConnectionError as exc:
+                if attempt == CONNECT_ATTEMPTS:
+                    raise SkodaError(
+                        f"could not reach the Skoda API ({method} {path}): {exc}"
+                    ) from exc
+                print(f"Could not connect to the Skoda API, retrying in {CONNECT_RETRY_DELAY}s")
+                time.sleep(CONNECT_RETRY_DELAY)
+            except requests.RequestException as exc:
+                raise SkodaError(f"could not reach the Skoda API ({method} {path}): {exc}") from exc
 
         self._record_quota(response)
 
