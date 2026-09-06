@@ -356,10 +356,6 @@ def main():
     config = load_config()
     now = datetime.now()
 
-    if not smart_charging_enabled(config):
-        print("Smart charging disabled, aborting")
-        return
-
     skoda = Skoda(config)
     state, battery_percent, target_percent = read_charging(skoda.vehicle())
     print(f"Quota remaining this hour: {skoda.remaining}")
@@ -375,6 +371,15 @@ def main():
 
     if battery_percent >= limit_percent:
         print("Battery fully charged, aborting")
+        return
+
+    # Read last, not first. The override only decides whether to command the
+    # charger, so every abort above reaches the same outcome without it - and
+    # Home Assistant restarts behind Caddy return 502 for the 30-90s it takes
+    # to boot. Consulting it up front turned those into failed runs that would
+    # have done nothing anyway.
+    if not smart_charging_enabled(config):
+        print("Smart charging disabled, aborting")
         return
 
     print(f"Current date is: {now}")

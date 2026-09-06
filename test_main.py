@@ -319,3 +319,85 @@ def test_malformed_number_is_reported_with_its_value(monkeypatch):
         main.load_config()
 
     assert "DEPARTURE_HOUR='seven' is not a valid int" in str(caught.value)
+
+
+# --- main(): when the override is read --------------------------------------
+# The override gates commands only, so every abort before that point reaches the
+# same outcome without it. Home Assistant restarts behind Caddy return 502 for
+# the 30-90s it takes to boot, and reading it up front turned those into failed
+# runs that would have done nothing anyway.
+
+RUN_CONFIG = dict(
+    CONFIG,
+    PRICE_ZONE="SE3",
+    PRICE_BASE_URL="https://prices.example/",
+    DEPARTURE_HOUR=7,
+    EV_CHARGER_SPEED_KW=11.0,
+    EV_BATTERY_CAPACITY_KWH=82.0,
+    EV_CHARGE_LIMIT_PERCENT=80,
+    HA_BASE_URL="https://ha.example/api",
+    HA_TOKEN="token",
+    HA_EV_SMART_CHARGING_BOOLEAN="input_boolean.smart_charging",
+)
+
+
+def run_main(monkeypatch, state, percent, target=80, override=None,
+             ha_calls=None, commands=None):
+    """
+    Drive main() with the network stubbed. Returns (ha_calls, commands).
+
+    Both lists can be passed in, so a test whose run raises can still inspect
+    what happened before the exception.
+    """
+    ha_calls = [] if ha_calls is None else ha_calls
+    commands = [] if commands is None else commands
+
+    def fake_override(config):
+        ha_calls.append(config)
+        if callable(override):
+            return override()
+        return override
+
+    monkeypatch.setattr(main, "load_config", lambda: dict(RUN_CONFIG))
+    monkeypatch.setattr(main.Skoda, "vehicle",
+                        lambda self: vehicle_payload(state, percent, target))
+    monkeypatch.setattr(main, "smart_charging_enabled", fake_override)
+    monkeypatch.setattr(main.Skoda, "set_charging",
+                        lambda self, to_state: commands.append(to_state))
+    main.main()
+    return ha_calls, commands
+
+
+def test_home_assistant_is_not_consulted_when_the_cable_is_out(monkeypatch):
+    ha_calls, commands = run_main(monkeypatch, "CONNECT_CABLE", 40)
+
+    assert ha_calls == []
+    assert commands == []
+
+
+def test_home_assistant_is_not_consulted_when_the_battery_is_at_target(monkeypatch):
+    ha_calls, commands = run_main(monkeypatch, "READY_FOR_CHARGING", 80, target=80)
+
+    assert ha_calls == []
+    assert commands == []
+
+
+def test_the_override_is_read_once_the_car_actually_needs_charging(monkeypatch):
+    ha_calls, commands = run_main(monkeypatch, "READY_FOR_CHARGING", 40, override=False)
+
+    assert len(ha_calls) == 1
+    assert commands == []
+
+
+def test_an_unreadable_override_aborts_without_commanding(monkeypatch):
+    """A 502 must still stop the run rather than assume smart charging is on."""
+    commands = []
+
+    def explode():
+        raise main.HomeAssistantError("Home Assistant returned 502")
+
+    with pytest.raises(main.HomeAssistantError):
+        run_main(monkeypatch, "READY_FOR_CHARGING", 40,
+                 override=explode, commands=commands)
+
+    assert commands == []
