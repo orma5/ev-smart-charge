@@ -1,0 +1,22 @@
+[project]
+name = "ev-smart-charge"
+version = "0.1.0"
+description = "Charges the car in the cheapest 15-minute electricity slots before departure."
+requires-python = ">=3.14"
+dependencies = [
+    "certifi==2025.4.26",
+    "charset-normalizer==3.4.1",
+    "idna==3.10",
+    "python-dotenv==1.1.0",
+    "requests==2.32.3",
+    "urllib3==2.4.0",
+]
+
+# pytest belongs here rather than in a second pinned file. The previous
+# requirements.txt / dev-requirements.txt pair kept the runtime pins in one
+# file and included it from the other precisely to stop them drifting; a
+# dependency group does the same job without a second file to include.
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+]
