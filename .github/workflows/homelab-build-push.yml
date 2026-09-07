@@ -44,8 +44,9 @@ jobs:
           username: ${{ secrets.REGISTRY_USER }}
           password: ${{ secrets.REGISTRY_PASSWORD }}
 
-      # arm64 emulation, for the k3s cluster (Raspberry Pi 5). Without this the
-      # image is amd64-only and the Pis cannot run it.
+      # arm64 emulation, for the k3s cluster (Raspberry Pi 5). The runner is
+      # amd64, so the whole build is emulated; without this there is nothing the
+      # cluster can run.
       - name: Set up QEMU (arm64 emulation)
         uses: docker/setup-qemu-action@v3
 
@@ -60,7 +61,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           push: true
-          platforms: linux/amd64,linux/arm64
+          # arm64 only. All four cluster nodes are arm64 and nothing else
+          # pulls this image - the NUC runs infrastructure, not applications -
+          # so the amd64 variant was layers the registry stored and garbage
+          # collection could never reclaim, because a live tag still referenced
+          # them. Testing the image locally on an amd64 machine still works
+          # through Docker Desktop's QEMU, just slower.
+          platforms: linux/arm64
           tags: ${{ steps.vars.outputs.COMMIT_TAG }}
 
   # There is no deploy job on purpose. The CronJob in homebrain tracks :latest
