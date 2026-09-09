@@ -5,6 +5,13 @@ FROM ghcr.io/astral-sh/uv:python3.14-alpine
 # Set environment variable for timezone
 ENV TZ=Europe/Stockholm
 
+# Python block-buffers stdout when it is a pipe rather than a terminal, which
+# under Kubernetes means `kubectl logs` shows nothing until 8KB has built up.
+# The CronJob never noticed: the container exited after every run and exit
+# flushed the buffer. A process that never exits never flushes, so the logs of
+# a long-running scheduler were invisible exactly when they were wanted.
+ENV PYTHONUNBUFFERED=1
+
 # Install dependencies, including tzdata for timezone support
 RUN apk add --no-cache tzdata
 
