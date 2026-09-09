@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% set page = 'history' %}
+
+{% block content %}
+
+<h2>Charging sessions</h2>
+
+{% if not sessions %}
+  <div class="panel">
+    <p class="note">No sessions in the last {{ days }} days.</p>
+  </div>
+{% endif %}
+
+{% for session, strip in sessions %}
+  <div class="panel">
+    <div class="figures">
+      <div class="figure">
+        <div class="value">{{ session.savings | kr }}</div>
+        <div class="label">saved</div>
+      </div>
+      <div class="figure">
+        <div class="value">{{ session.energy_kwh | kwh }}</div>
+        <div class="label">{{ session.start_percent }}% → {{ session.end_percent }}%</div>
+      </div>
+      <div class="figure">
+        <div class="value">{{ session.actual_cost | kr }}</div>
+        <div class="label">instead of {{ session.baseline_cost | kr }}</div>
+      </div>
+      {% if strip %}
+        <div class="figure">
+          {{ strip }}
+          <div class="label">price per slot; charged where highlighted</div>
+        </div>
+      {% endif %}
+    </div>
+    <p class="note">
+      Plugged in {{ session.started_at | when }}, unplugged {{ session.ended_at | when }}.
+      {%- if session.savings is none %}
+        Not priced: spot prices are missing for some of the slots involved.
+      {% endif %}
+      {%- if session.error_count %}
+        {{ session.error_count }} run{{ '' if session.error_count == 1 else 's' }} failed during this session.
+      {% endif %}
+    </p>
+  </div>
+{% endfor %}
+
+<h2>Recent runs</h2>
+<div class="panel scroll">
+  <table>
+    <thead>
+      <tr>
+        <th>When</th>
+        <th>State</th>
+        <th class="num">Battery</th>
+        <th>Decision</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for run in recent %}
+        <tr>
+          <td>{{ run.at | when }}</td>
+          <td>{{ run.charging_state or '—' }}</td>
+          <td class="num">{{ run.battery_percent ~ '%' if run.battery_percent is not none else '—' }}</td>
+          <td {% if run.error %}class="warn"{% endif %}>
+            {{ run.decision | decision }}{% if run.error %} — {{ run.error }}{% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="4" class="note">Nothing recorded yet.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+
+<p class="note">
+  Showing {{ days }} days.
+  <a href="{{ url_for('history', days=7) }}">7</a> ·
+  <a href="{{ url_for('history', days=30) }}">30</a> ·
+  <a href="{{ url_for('history', days=90) }}">90</a>
+</p>
+
+{% endblock %}

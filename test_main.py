@@ -20,6 +20,20 @@ def slots(*specs):
     ]
 
 
+def frozen(moment):
+    """
+    A datetime class with now() pinned, so a tick can be driven at a chosen
+    time. Subclassed rather than stubbed because main also uses
+    datetime.fromisoformat, which the subclass keeps.
+    """
+    class Frozen(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return moment
+
+    return Frozen
+
+
 CONFIG = {
     "SKODA_API_BASE": "https://api.example",
     "SKODA_VIN": "TMBJC7NY2MF016495",
@@ -167,14 +181,40 @@ def vehicle_payload(state="CHARGING", percent=55, target=80):
     }
 
 
-def test_read_charging_extracts_the_three_fields():
-    assert main.read_charging(vehicle_payload()) == ("CHARGING", 55, 80)
+def test_read_charging_extracts_the_four_fields():
+    state, percent, target, captured = main.read_charging(vehicle_payload())
+
+    assert (state, percent, target) == ("CHARGING", 55, 80)
+    assert captured == main._local("2026-09-05T11:41:09Z")
 
 
 def test_read_charging_allows_a_missing_target():
     payload = vehicle_payload()
     del payload["vehicle"]["charging"]["settings"]["targetStateOfChargeInPercent"]
-    assert main.read_charging(payload) == ("CHARGING", 55, None)
+    assert main.read_charging(payload)[:3] == ("CHARGING", 55, None)
+
+
+def test_a_missing_capture_timestamp_is_tolerated():
+    """
+    It only dates history more precisely; no charging decision depends on it,
+    so its absence must not cost a run.
+    """
+    payload = vehicle_payload()
+    del payload["vehicle"]["charging"]["carCapturedTimestamp"]
+    assert main.read_charging(payload)[3] is None
+
+
+def test_capture_timestamps_are_naive_and_offset_aware():
+    """
+    The same instant written two ways must land on the same naive local value.
+    Asserting the offset is honoured this way keeps the test independent of
+    whatever timezone it happens to run in.
+    """
+    as_utc = main._local("2026-09-05T11:41:09Z")
+    as_offset = main._local("2026-09-05T13:41:09+02:00")
+
+    assert as_utc == as_offset
+    assert as_utc.tzinfo is None
 
 
 def test_read_charging_raises_when_charging_is_absent():
@@ -299,7 +339,7 @@ def test_an_unknown_command_sends_nothing(monkeypatch, capsys):
 # --- config -----------------------------------------------------------------
 
 def test_missing_configuration_names_every_missing_variable(monkeypatch):
-    for name in ("PRICE_ZONE", "DEPARTURE_HOUR", "SKODA_API_KEY", "SKODA_VIN"):
+    for name in ("PRICE_ZONE", "SKODA_API_KEY", "SKODA_VIN", "DATABASE_PASSWORD"):
         monkeypatch.delenv(name, raising=False)
 
     with pytest.raises(SystemExit) as caught:
@@ -307,97 +347,149 @@ def test_missing_configuration_names_every_missing_variable(monkeypatch):
 
     message = str(caught.value)
     assert "PRICE_ZONE is not set" in message
-    assert "DEPARTURE_HOUR is not set" in message
     assert "SKODA_API_KEY is not set" in message
     assert "SKODA_VIN is not set" in message
+    assert "DATABASE_PASSWORD is not set" in message
 
 
 def test_malformed_number_is_reported_with_its_value(monkeypatch):
-    monkeypatch.setenv("DEPARTURE_HOUR", "seven")
+    monkeypatch.setenv("DATABASE_PORT", "five thousand")
 
     with pytest.raises(SystemExit) as caught:
         main.load_config()
 
-    assert "DEPARTURE_HOUR='seven' is not a valid int" in str(caught.value)
+    assert "DATABASE_PORT='five thousand' is not a valid int" in str(caught.value)
 
 
-# --- main(): when the override is read --------------------------------------
-# The override gates commands only, so every abort before that point reaches the
-# same outcome without it. Home Assistant restarts behind Caddy return 502 for
-# the 30-90s it takes to boot, and reading it up front turned those into failed
-# runs that would have done nothing anyway.
-
-RUN_CONFIG = dict(
-    CONFIG,
-    PRICE_ZONE="SE3",
-    PRICE_BASE_URL="https://prices.example/",
-    DEPARTURE_HOUR=7,
-    EV_CHARGER_SPEED_KW=11.0,
-    EV_BATTERY_CAPACITY_KWH=82.0,
-    EV_CHARGE_LIMIT_PERCENT=80,
-    HA_BASE_URL="https://ha.example/api",
-    HA_TOKEN="token",
-    HA_EV_SMART_CHARGING_BOOLEAN="input_boolean.smart_charging",
-)
-
-
-def run_main(monkeypatch, state, percent, target=80, override=None,
-             ha_calls=None, commands=None):
+def test_user_editable_settings_are_not_configuration(monkeypatch):
     """
-    Drive main() with the network stubbed. Returns (ha_calls, commands).
-
-    Both lists can be passed in, so a test whose run raises can still inspect
-    what happened before the exception.
+    The departure hour and the car's specs moved into the settings table so the
+    UI can edit them. Leaving them in the env spec as well would mean a second
+    copy that silently disagrees with what the UI shows.
     """
-    ha_calls = [] if ha_calls is None else ha_calls
+    for name in ("DEPARTURE_HOUR", "EV_BATTERY_CAPACITY_KWH", "PRICE_ZONE"):
+        monkeypatch.delenv(name, raising=False)
+
+    with pytest.raises(SystemExit) as caught:
+        main.load_config()
+
+    message = str(caught.value)
+    assert "PRICE_ZONE is not set" in message
+    assert "DEPARTURE_HOUR" not in message
+    assert "EV_BATTERY_CAPACITY_KWH" not in message
+
+
+# --- run_once(): what each path records -------------------------------------
+# The database is stubbed at the db module rather than faked at the psycopg
+# level, which keeps these tests as free of I/O as the arithmetic ones above.
+
+SETTINGS = {
+    "departure_hour": 7,
+    "charger_speed_kw": 11.0,
+    "battery_capacity_kwh": 82.0,
+    "charge_limit_percent": 80,
+    "smart_charging_enabled": True,
+}
+
+RUN_CONFIG = dict(CONFIG, PRICE_ZONE="SE3", PRICE_BASE_URL="https://prices.example/")
+
+
+def run_tick(monkeypatch, state, percent, target=80, settings=None, prices=None,
+             vehicle=None, commands=None, recorded=None):
+    """
+    Drive run_once() with the database and the network stubbed.
+
+    Returns (recorded, commands). Both lists can be passed in, so a test whose
+    tick raises can still inspect what was written before the exception.
+    """
+    recorded = [] if recorded is None else recorded
     commands = [] if commands is None else commands
 
-    def fake_override(config):
-        ha_calls.append(config)
-        if callable(override):
-            return override()
-        return override
-
-    monkeypatch.setattr(main, "load_config", lambda: dict(RUN_CONFIG))
+    monkeypatch.setattr(main.db, "load_settings",
+                        lambda conn: dict(SETTINGS, **(settings or {})))
+    monkeypatch.setattr(main.db, "record_run",
+                        lambda conn, run: recorded.append(dict(run)))
+    # Prices already cached, so no fetch is attempted and no HTTP is needed.
+    monkeypatch.setattr(main.db, "count_prices_for_day", lambda conn, zone, date: 96)
+    monkeypatch.setattr(main.db, "load_prices", lambda conn, zone, since: prices or [])
     monkeypatch.setattr(main.Skoda, "vehicle",
-                        lambda self: vehicle_payload(state, percent, target))
-    monkeypatch.setattr(main, "smart_charging_enabled", fake_override)
+                        vehicle or (lambda self: vehicle_payload(state, percent, target)))
     monkeypatch.setattr(main.Skoda, "set_charging",
                         lambda self, to_state: commands.append(to_state))
-    main.main()
-    return ha_calls, commands
+
+    main.run_once(object(), RUN_CONFIG)
+    return recorded, commands
 
 
-def test_home_assistant_is_not_consulted_when_the_cable_is_out(monkeypatch):
-    ha_calls, commands = run_main(monkeypatch, "CONNECT_CABLE", 40)
-
-    assert ha_calls == []
-    assert commands == []
-
-
-def test_home_assistant_is_not_consulted_when_the_battery_is_at_target(monkeypatch):
-    ha_calls, commands = run_main(monkeypatch, "READY_FOR_CHARGING", 80, target=80)
-
-    assert ha_calls == []
-    assert commands == []
-
-
-def test_the_override_is_read_once_the_car_actually_needs_charging(monkeypatch):
-    ha_calls, commands = run_main(monkeypatch, "READY_FOR_CHARGING", 40, override=False)
-
-    assert len(ha_calls) == 1
-    assert commands == []
-
-
-def test_an_unreadable_override_aborts_without_commanding(monkeypatch):
-    """A 502 must still stop the run rather than assume smart charging is on."""
-    commands = []
-
-    def explode():
-        raise main.HomeAssistantError("Home Assistant returned 502")
-
-    with pytest.raises(main.HomeAssistantError):
-        run_main(monkeypatch, "READY_FOR_CHARGING", 40,
-                 override=explode, commands=commands)
+def test_an_unplugged_car_is_recorded_and_commands_nothing(monkeypatch):
+    recorded, commands = run_tick(monkeypatch, "CONNECT_CABLE", 40)
 
     assert commands == []
+    assert recorded[0]["decision"] == "cable-disconnected"
+    assert recorded[0]["battery_percent"] == 40
+
+
+def test_a_full_battery_is_recorded_and_commands_nothing(monkeypatch):
+    recorded, commands = run_tick(monkeypatch, "READY_FOR_CHARGING", 80, target=80)
+
+    assert commands == []
+    assert recorded[0]["decision"] == "battery-full"
+
+
+def test_the_override_gates_the_command_but_not_the_record(monkeypatch):
+    recorded, commands = run_tick(monkeypatch, "READY_FOR_CHARGING", 40,
+                                  settings={"smart_charging_enabled": False})
+
+    assert commands == []
+    assert recorded[0]["decision"] == "disabled"
+
+
+def test_a_cheap_slot_starts_charging(monkeypatch):
+    """06:00 is the cheapest slot before a 07:00 departure, so charge in it."""
+    monkeypatch.setattr(main, "datetime", frozen(datetime(2026, 8, 30, 6, 0)))
+    recorded, commands = run_tick(
+        monkeypatch, "READY_FOR_CHARGING", 79,
+        prices=slots((6, 0, 0.10), (6, 15, 0.90), (6, 30, 0.90), (6, 45, 0.90)),
+    )
+
+    assert commands == ["ON"]
+    assert recorded[0]["decision"] == "charging-cheap-slot"
+
+
+def test_an_expensive_slot_stops_a_charge_in_progress(monkeypatch):
+    monkeypatch.setattr(main, "datetime", frozen(datetime(2026, 8, 30, 6, 0)))
+    recorded, commands = run_tick(
+        monkeypatch, "CHARGING", 79,
+        prices=slots((6, 0, 0.90), (6, 15, 0.10), (6, 30, 0.90), (6, 45, 0.90)),
+    )
+
+    assert commands == ["OFF"]
+    assert recorded[0]["decision"] == "waiting-for-cheaper"
+
+
+def test_missing_prices_leave_a_charge_alone(monkeypatch):
+    """No price data is not a reason to interrupt a charge already running."""
+    monkeypatch.setattr(main, "datetime", frozen(datetime(2026, 8, 30, 6, 0)))
+    recorded, commands = run_tick(monkeypatch, "CHARGING", 79, prices=[])
+
+    assert commands == []
+    assert recorded[0]["decision"] == "no-prices"
+
+
+def test_a_failed_read_is_still_recorded_and_still_raises(monkeypatch):
+    """
+    The reason run_once has a `finally`. Under the CronJob an unreachable API
+    was visible only as a failed Job; in a long-running process it has to reach
+    the history screen, and it must still raise so the tick is not mistaken for
+    a decision to do nothing.
+    """
+    def explode(self):
+        raise main.SkodaError("could not reach the Skoda API")
+
+    recorded = []
+    with pytest.raises(main.SkodaError):
+        run_tick(monkeypatch, "CHARGING", 40, vehicle=explode, recorded=recorded)
+
+    assert recorded[0]["decision"] == "error"
+    assert "could not reach" in recorded[0]["error"]
+    assert recorded[0]["charging_state"] is None

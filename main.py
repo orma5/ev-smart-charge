@@ -6,6 +6,8 @@ import requests
 from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
+import db
+
 # Load environment variables from .env file (local dev only; in the cluster
 # these come from the CronJob's env and the ev-smart-charge Secret).
 load_dotenv()
@@ -29,7 +31,6 @@ load_dotenv()
 # snapshot, and was observed showing the identical 43-minute-old state.
 
 SKODA_TIMEOUT = 10  # Public internet.
-HA_TIMEOUT = 5      # Home Assistant is on the LAN.
 
 # Cluster DNS resolution of the Skoda hostname fails intermittently (EAI_AGAIN,
 # a few runs an hour), and one bad lookup used to lose the whole run. Two
@@ -40,6 +41,12 @@ CONNECT_RETRY_DELAY = 2
 
 SLOT_MINUTES = 15
 SLOTS_PER_HOUR = 60 // SLOT_MINUTES
+
+# A day is treated as fully published, and so never re-fetched, at this many
+# slots. A normal day has 96; the spring DST day has 92 and the autumn one 100,
+# so the threshold is the short day rather than 96, and a genuinely partial
+# response simply gets fetched again on the next tick.
+DAY_IS_COMPLETE = 92
 
 # The one charging state that means the cable is NOT in the car. Tested by
 # exclusion rather than by listing the connected states, because the spec warns
@@ -61,30 +68,26 @@ class RateLimited(SkodaError):
     """The hourly request quota is exhausted."""
 
 
-class HomeAssistantError(Exception):
-    """Home Assistant could not be read, so the override state is unknown."""
-
-
 def load_config():
     """
     Read and validate configuration, reporting every problem at once by name.
+
+    What is left here is deployment facts only - where the services are and how
+    to authenticate to them. Everything a person would want to change (the
+    departure hour, the car's specs, the manual override) now lives in the
+    settings table, where the web UI can edit it; see schema.sql.
     """
     spec = {
         "PRICE_ZONE": str,
         "PRICE_BASE_URL": str,
-        "DEPARTURE_HOUR": int,
-        "EV_CHARGER_SPEED_KW": float,
-        "EV_BATTERY_CAPACITY_KWH": float,
-        "EV_CHARGE_LIMIT_PERCENT": int,
         "SKODA_API_BASE": str,
         "SKODA_API_KEY": str,
         "SKODA_VIN": str,
-        # Home Assistant is still consulted for exactly one thing: the manual
-        # override. It is a preference, not a property of the car, so the Skoda
-        # API has no equivalent. This costs nothing against the Skoda quota.
-        "HA_BASE_URL": str,
-        "HA_TOKEN": str,
-        "HA_EV_SMART_CHARGING_BOOLEAN": str,
+        "DATABASE_HOST": str,
+        "DATABASE_PORT": int,
+        "DATABASE_NAME": str,
+        "DATABASE_USER": str,
+        "DATABASE_PASSWORD": str,
     }
 
     config = {}
@@ -171,8 +174,11 @@ def read_charging(payload):
     smoke test to find: every mocked fixture had been built to the unwrapped
     shape, so the whole suite passed against a payload the API never sends.
 
-    Returns (state, battery_percent, target_percent). target_percent is None when
-    the car does not report one, in which case the configured limit is used.
+    Returns (state, battery_percent, target_percent, captured_at).
+    target_percent is None when the car does not report one, in which case the
+    configured limit is used. captured_at is None when the car does not report
+    one, which is tolerated rather than fatal - it is only used to date history
+    more precisely, and no charging decision depends on it.
     """
     payload = payload or {}
     vehicle = payload.get("vehicle") or {}
@@ -189,7 +195,26 @@ def read_charging(payload):
     if percent is None:
         raise SkodaError("no battery state of charge in response")
 
-    return state, int(percent), settings.get("targetStateOfChargeInPercent")
+    captured = charging.get("carCapturedTimestamp") or status.get("carCapturedTimestamp")
+
+    return state, int(percent), settings.get("targetStateOfChargeInPercent"), _local(captured)
+
+
+def _local(timestamp):
+    """
+    Parse an API timestamp into a naive local datetime, or None.
+
+    The API sends UTC with an offset; everything else in this application is
+    naive Europe/Stockholm, because that is the clock the price slots are
+    published against. astimezone() with no argument converts to whatever TZ
+    the container is set to, which the deployment pins to Europe/Stockholm.
+    """
+    if not timestamp:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp).astimezone().replace(tzinfo=None)
+    except ValueError:
+        return None
 
 
 # --- Skoda public API -------------------------------------------------------
@@ -280,37 +305,10 @@ class Skoda:
         print(f"EV charging {action} requested (202 accepted, applied asynchronously)")
 
 
-# --- Home Assistant (override only) -----------------------------------------
-
-def smart_charging_enabled(config):
-    """
-    Read the manual override toggle.
-
-    Raises rather than assuming: if we cannot tell whether the user has disabled
-    smart charging, the safe move is to touch nothing.
-    """
-    url = f"{config['HA_BASE_URL']}/states/{config['HA_EV_SMART_CHARGING_BOOLEAN']}"
-    headers = {"Authorization": f"Bearer {config['HA_TOKEN']}", "content-type": "application/json"}
-
-    try:
-        response = requests.get(url, headers=headers, timeout=HA_TIMEOUT)
-    except requests.RequestException as exc:
-        raise HomeAssistantError(f"could not reach Home Assistant: {exc}") from exc
-
-    if response.status_code != 200:
-        raise HomeAssistantError(f"Home Assistant returned {response.status_code}")
-
-    state = response.json().get("state")
-    if state in (None, "", "unknown", "unavailable"):
-        raise HomeAssistantError(f"override state is '{state}'")
-
-    return state == "on"
-
-
 # --- Prices -----------------------------------------------------------------
 
-def _fetch_day(config, date, since=None):
-    """Fetch one day of 15-minute price slots. Returns [] if not published."""
+def _fetch_day(config, date):
+    """Fetch one whole day of 15-minute price slots. Returns [] if unpublished."""
     url = f"{config['PRICE_BASE_URL']}/{date:%Y}/{date:%m-%d}_{config['PRICE_ZONE']}.json"
 
     try:
@@ -323,76 +321,141 @@ def _fetch_day(config, date, since=None):
         print(f"No prices published for {date:%Y-%m-%d} (status {response.status_code})")
         return []
 
-    slots = []
-    for price in response.json():
-        starts = datetime.fromisoformat(price["time_start"]).replace(tzinfo=None)
-        if since is None or starts >= since:
-            slots.append({"time_start": starts, "price": price["SEK_per_kWh"]})
-    return slots
+    return [
+        {
+            "time_start": datetime.fromisoformat(price["time_start"]).replace(tzinfo=None),
+            "price": price["SEK_per_kWh"],
+        }
+        for price in response.json()
+    ]
 
 
-def fetch_electricity_prices_from_date(config, date):
-    """Today's remaining slots, plus tomorrow's once they are published."""
-    print("Fetch electricity prices for today")
-    prices = _fetch_day(config, date, since=date.replace(minute=0, second=0, microsecond=0))
+def ensure_prices(conn, config, date):
+    """
+    Make sure a day's slots are in the database, fetching them if not.
 
-    if date.hour > 13:
-        print("Fetch electricity prices for tomorrow")
-        prices += _fetch_day(config, date + timedelta(days=1))
+    The whole day is stored, not just the slots still ahead of us: the savings
+    baseline is priced from the moment the cable went in, which by then is in
+    the past. Filtering to what the decision needs happens at read time.
+    """
+    if db.count_prices_for_day(conn, config["PRICE_ZONE"], date.date()) >= DAY_IS_COMPLETE:
+        return
 
-    return prices
+    print(f"Fetch electricity prices for {date:%Y-%m-%d}")
+    slots = _fetch_day(config, date)
+    if slots:
+        db.store_prices(conn, config["PRICE_ZONE"], slots)
 
 
-# --- Entry point ------------------------------------------------------------
+def prices_for_decision(conn, config, now):
+    """
+    The price slots the decision may choose between: today's, plus tomorrow's
+    once they are published in the afternoon.
 
-def main():
+    The lower bound is the top of the current hour, which is what this has
+    always used. Note it lets up to three already-elapsed slots of the current
+    hour compete for the cheapest ranks, which can crowd out the slot in
+    progress - pre-existing behaviour, left alone here on purpose so that
+    moving prices into Postgres changes storage and nothing else.
+    """
+    ensure_prices(conn, config, now)
+    if now.hour > 13:
+        ensure_prices(conn, config, now + timedelta(days=1))
+
+    since = now.replace(minute=0, second=0, microsecond=0)
+    return db.load_prices(conn, config["PRICE_ZONE"], since)
+
+
+# --- One scheduled tick -----------------------------------------------------
+
+def run_once(conn, config):
     """
     Decide, from spot prices, whether the EV should be charging right now.
 
-    The car is read from and commanded through Skoda's public API. Home
-    Assistant is consulted for one thing only: the manual override toggle.
+    Exactly one `runs` row is written per call, on every path including the
+    failures, which is what the `finally` below is for. A tick that could not
+    reach Skoda is a fact both the history screen and the savings maths need;
+    under the CronJob it was visible only as a failed Job in kubectl.
     """
     print("** EV Smart charge run started **")
-    config = load_config()
     now = datetime.now()
-
     skoda = Skoda(config)
-    state, battery_percent, target_percent = read_charging(skoda.vehicle())
+
+    run = {
+        "at": now,
+        "slot_start": slot_start(now),
+        "car_captured_at": None,
+        "charging_state": None,
+        "battery_percent": None,
+        "target_percent": None,
+        "quota_remaining": None,
+        "decision": "error",
+        "error": None,
+    }
+
+    try:
+        _decide(conn, config, now, skoda, run)
+    except SkodaError as exc:
+        run["error"] = str(exc)
+        raise
+    finally:
+        run["quota_remaining"] = skoda.remaining
+        db.record_run(conn, run)
+        print(f"** EV Smart charge run ended: {run['decision']} **")
+
+
+def _decide(conn, config, now, skoda, run):
+    """The decision itself, filling `run` in as it learns things."""
+    settings = db.load_settings(conn)
+
+    state, battery_percent, target_percent, captured_at = read_charging(skoda.vehicle())
     print(f"Quota remaining this hour: {skoda.remaining}")
+
+    run.update(
+        charging_state=state,
+        battery_percent=battery_percent,
+        target_percent=target_percent,
+        car_captured_at=captured_at,
+    )
 
     if not cable_connected(state):
         print(f"Charger not connected (state: '{state}'), aborted")
+        run["decision"] = "cable-disconnected"
         return
 
     # The car's own target wins when it reports one - it is the value set in the
     # MyŠkoda app, so there is one source of truth rather than two that drift.
-    limit_percent = target_percent if target_percent is not None else config["EV_CHARGE_LIMIT_PERCENT"]
+    limit_percent = (
+        target_percent if target_percent is not None else settings["charge_limit_percent"]
+    )
     print(f"Charging state: {state}, battery {battery_percent}%, target {limit_percent}%")
 
     if battery_percent >= limit_percent:
         print("Battery fully charged, aborting")
+        run["decision"] = "battery-full"
         return
 
-    # Read last, not first. The override only decides whether to command the
-    # charger, so every abort above reaches the same outcome without it - and
-    # Home Assistant restarts behind Caddy return 502 for the 30-90s it takes
-    # to boot. Consulting it up front turned those into failed runs that would
-    # have done nothing anyway.
-    if not smart_charging_enabled(config):
+    # Read after the car, not before. The override only decides whether to
+    # command the charger, so every abort above reaches the same outcome
+    # without it. That ordering was forced by Home Assistant returning 502s
+    # while it rebooted; it costs nothing to keep now that the toggle is a
+    # column in the same database this row is about to be written to.
+    if not settings["smart_charging_enabled"]:
         print("Smart charging disabled, aborting")
+        run["decision"] = "disabled"
         return
 
     print(f"Current date is: {now}")
-    print(f"Next departure hour is set to: {config['DEPARTURE_HOUR']}")
+    print(f"Next departure hour is set to: {settings['departure_hour']}")
 
-    slots_available = slots_to_departure(now, config["DEPARTURE_HOUR"])
+    slots_available = slots_to_departure(now, settings["departure_hour"])
     print(f"Number of 15-min slots to next departure is {slots_available}")
 
     slots_to_charge = slots_needed_to_charge(
         battery_percent,
         limit_percent,
-        config["EV_BATTERY_CAPACITY_KWH"],
-        config["EV_CHARGER_SPEED_KW"],
+        settings["battery_capacity_kwh"],
+        settings["charger_speed_kw"],
     )
     print(f"Number of 15-min slots needed to charge is: {slots_to_charge}")
 
@@ -400,38 +463,46 @@ def main():
 
     if slots_available <= slots_to_charge:
         print("Too few slots available to smart charge, charging now")
+        run["decision"] = "charging-now-no-time"
         if not charging_now:
             skoda.set_charging("ON")
-        print("** EV Smart charge run ended **")
         return
 
-    prices = fetch_electricity_prices_from_date(config, now)
-    departure = next_departure(now, config["DEPARTURE_HOUR"])
+    prices = prices_for_decision(conn, config, now)
+    departure = next_departure(now, settings["departure_hour"])
 
     if not prices:
         # No price data is not a reason to interrupt a charge in progress.
         print("No price data available, leaving charging state unchanged")
-        print("** EV Smart charge run ended **")
+        run["decision"] = "no-prices"
         return
 
     if should_charge_now(prices, now, departure, slots_to_charge):
         print("Current slot is cheap, start or continue charging")
+        run["decision"] = "charging-cheap-slot"
         if not charging_now:
             skoda.set_charging("ON")
     else:
         schedule = cheapest_slots(prices, departure, slots_to_charge)
         print(f"Current slot is not cheap, stop charging. Charging schedule is: {schedule} ")
+        run["decision"] = "waiting-for-cheaper"
         if charging_now:
             skoda.set_charging("OFF")
 
-    print("** EV Smart charge run ended **")
+
+# --- Entry point ------------------------------------------------------------
+
+def main():
+    """One tick, for local development. The deployed process schedules these."""
+    config = load_config()
+    with db.connect(config) as conn:
+        db.init_schema(conn)
+        run_once(conn, config)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except (SkodaError, HomeAssistantError) as exc:
-        # Exit non-zero so a failed run is a failed Job rather than looking like
-        # a successful decision to do nothing.
+    except SkodaError as exc:
         print(f"Aborting: {exc}")
         sys.exit(1)

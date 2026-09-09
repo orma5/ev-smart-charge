@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+{% set page = 'overview' %}
+
+{% block content %}
+
+<h2>Right now</h2>
+<div class="panel">
+  {% if latest %}
+    <div class="figures">
+      <div class="figure">
+        <div class="value">{{ latest.battery_percent if latest.battery_percent is not none else '—' }}{% if latest.battery_percent is not none %}%{% endif %}</div>
+        <div class="label">battery{% if latest.target_percent %}, target {{ latest.target_percent }}%{% endif %}</div>
+      </div>
+      <div class="figure">
+        <div class="value">{{ latest.decision | decision }}</div>
+        <div class="label">
+          last checked {{ latest.at | ago }}
+          {%- if latest.quota_remaining is not none %} · {{ latest.quota_remaining }} API requests left this hour{% endif %}
+        </div>
+      </div>
+    </div>
+    {% if latest.error %}
+      <p class="note warn">{{ latest.error }}</p>
+    {% endif %}
+    {% if not settings.smart_charging_enabled %}
+      <p class="note warn">Smart charging is switched off, so the car is left to charge whenever it likes.</p>
+    {% endif %}
+  {% else %}
+    <p class="note">No runs recorded yet. The scheduler writes one every four minutes.</p>
+  {% endif %}
+</div>
+
+<h2>Saved over the last {{ days }} days</h2>
+<div class="panel">
+  <div class="figures">
+    <div class="figure">
+      <div class="value big">{{ totals.savings | kr }}</div>
+      <div class="label">saved vs charging on plug-in</div>
+    </div>
+    <div class="figure">
+      <div class="value">{{ totals.actual_cost | kr }}</div>
+      <div class="label">actually spent</div>
+    </div>
+    <div class="figure">
+      <div class="value">{{ totals.baseline_cost | kr }}</div>
+      <div class="label">it would have cost</div>
+    </div>
+    <div class="figure">
+      <div class="value">{{ totals.energy_kwh | kwh }}</div>
+      <div class="label">charged over {{ totals.sessions }} session{{ '' if totals.sessions == 1 else 's' }}</div>
+    </div>
+  </div>
+
+  {% if chart %}
+    {{ chart }}
+  {% else %}
+    <p class="note">Nothing to chart yet — no completed charging sessions in this window.</p>
+  {% endif %}
+
+  {% if totals.unpriced %}
+    <p class="note warn">
+      {{ totals.unpriced }} session{{ '' if totals.unpriced == 1 else 's' }} could not be
+      priced, because spot prices are missing for some of the slots involved. Those are
+      left out of the totals above rather than counted as zero.
+    </p>
+  {% endif %}
+
+  <p class="note">
+    The comparison is against charging flat out from the moment the cable went in until
+    the car reached its target. Energy is estimated from the car's state of charge and the
+    battery size in settings — there is no meter in the loop — so treat these as close,
+    not exact.
+  </p>
+</div>
+
+{% if sessions %}
+  <h2>Latest sessions</h2>
+  <div class="panel scroll">
+    <table>
+      <thead>
+        <tr>
+          <th>Plugged in</th>
+          <th class="num">Charge</th>
+          <th class="num">Energy</th>
+          <th class="num">Cost</th>
+          <th class="num">Saved</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for session in sessions %}
+          <tr>
+            <td>{{ session.started_at | when }}</td>
+            <td class="num">{{ session.start_percent }}% → {{ session.end_percent }}%</td>
+            <td class="num">{{ session.energy_kwh | kwh }}</td>
+            <td class="num">{{ session.actual_cost | kr }}</td>
+            <td class="num">{{ session.savings | kr }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="note"><a href="{{ url_for('history', days=days) }}">All sessions and every run →</a></p>
+{% endif %}
+
+<p class="note">
+  Showing {{ days }} days.
+  <a href="{{ url_for('overview', days=7) }}">7</a> ·
+  <a href="{{ url_for('overview', days=30) }}">30</a> ·
+  <a href="{{ url_for('overview', days=90) }}">90</a>
+</p>
+
+{% endblock %}

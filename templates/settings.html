@@ -1,0 +1,79 @@
+{% extends "base.html" %}
+{% set page = 'settings' %}
+
+{% block content %}
+
+<h2>Settings</h2>
+
+{% if saved %}
+  <div class="panel"><p class="note">Saved. The next run picks these up within four minutes.</p></div>
+{% endif %}
+
+<div class="panel">
+  <form method="post">
+    <label>
+      <span class="label">Smart charging</span>
+      <span class="toggle">
+        <input type="checkbox" name="smart_charging_enabled" id="smart_charging_enabled"
+               {% if settings.smart_charging_enabled %}checked{% endif %}>
+        <span>Charge in the cheapest slots before departure</span>
+      </span>
+      <span class="hint">
+        Off means the car is left alone and charges as soon as it is plugged in.
+        Nothing is recorded as saved while it is off.
+      </span>
+    </label>
+
+    <label>
+      <span class="label">Departure hour</span>
+      <input type="number" name="departure_hour" min="0" max="23" step="1"
+             value="{{ settings.departure_hour }}">
+      <span class="hint">The car must be at its target charge by this hour, every day.</span>
+      {% if problems.departure_hour %}<span class="error">{{ problems.departure_hour }}</span>{% endif %}
+    </label>
+
+    <label>
+      <span class="label">Charger speed (kW)</span>
+      <input type="number" name="charger_speed_kw" min="0.1" max="350" step="0.1"
+             value="{{ settings.charger_speed_kw }}">
+      <span class="hint">
+        How fast the wallbox charges. Decides how many 15-minute slots a given
+        amount of charge needs, and the cost of the plug-in-and-go comparison.
+      </span>
+      {% if problems.charger_speed_kw %}<span class="error">{{ problems.charger_speed_kw }}</span>{% endif %}
+    </label>
+
+    <label>
+      <span class="label">Battery capacity (kWh)</span>
+      <input type="number" name="battery_capacity_kwh" min="1" max="500" step="0.1"
+             value="{{ settings.battery_capacity_kwh }}">
+      <span class="hint">
+        Used to turn a change in state of charge into kilowatt-hours, so this
+        scales every energy and savings figure on the other screens.
+      </span>
+      {% if problems.battery_capacity_kwh %}<span class="error">{{ problems.battery_capacity_kwh }}</span>{% endif %}
+    </label>
+
+    <label>
+      <span class="label">Charge limit fallback (%)</span>
+      <input type="number" name="charge_limit_percent" min="1" max="100" step="1"
+             value="{{ settings.charge_limit_percent }}">
+      <span class="hint">
+        Usually has no effect. The car reports its own target — the one set in the
+        MyŠkoda app — and that wins whenever it is present. This is only used on
+        the rare runs where the car reports no target at all.
+      </span>
+      {% if problems.charge_limit_percent %}<span class="error">{{ problems.charge_limit_percent }}</span>{% endif %}
+    </label>
+
+    <button type="submit">Save</button>
+  </form>
+</div>
+
+<p class="note">
+  The price zone, the Skoda API details and the database connection are not here on
+  purpose: they are facts about how this is deployed rather than preferences, and a
+  text field that can break the car charging is not worth the convenience.
+</p>
+
+{% endblock %}

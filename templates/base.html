@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{% block title %}EV Smart Charge{% endblock %}</title>
+<style>
+  /* Tokens are defined on :root and only redefined for dark, so no colour has
+     its single definition inside a media query. */
+  :root {
+    --bg: #f7f7f5;
+    --panel: #ffffff;
+    --ink: #1c1c1a;
+    --muted: #6b6b66;
+    --line: #e2e2dd;
+    --accent: #2f6f4f;
+    --accent-soft: #cfe3d7;
+    --warn: #9a4a2f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #16171a;
+      --panel: #1e2024;
+      --ink: #e8e8e4;
+      --muted: #9a9a94;
+      --line: #2e3136;
+      --accent: #6cc08c;
+      --accent-soft: #2c4436;
+      --warn: #e0906f;
+    }
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  a { color: var(--accent); }
+
+  header {
+    display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: baseline;
+    padding: 1rem 1.5rem;
+    border-bottom: 1px solid var(--line);
+    background: var(--panel);
+  }
+  header h1 { font-size: 1rem; margin: 0; letter-spacing: .02em; }
+  header h1 a { color: var(--ink); text-decoration: none; }
+  nav { display: flex; gap: 1.25rem; }
+  nav a { text-decoration: none; color: var(--muted); }
+  nav a:hover, nav a.on { color: var(--ink); }
+
+  main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
+  h2 { font-size: 1rem; margin: 2rem 0 .75rem; }
+  h2:first-child { margin-top: 0; }
+
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 1rem 1.25rem;
+    margin-bottom: 1rem;
+  }
+
+  .figures { display: flex; flex-wrap: wrap; gap: 2rem; }
+  .figure .value { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
+  .figure .value.big { font-size: 2.2rem; color: var(--accent); }
+  .figure .label { color: var(--muted); font-size: .82rem; }
+
+  .note { color: var(--muted); font-size: .82rem; margin: .5rem 0 0; }
+  .warn { color: var(--warn); }
+
+  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
+  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-weight: 500; font-size: .8rem; }
+  td.num, th.num { text-align: right; }
+  /* Wide tables scroll inside their own box rather than the page. */
+  .scroll { overflow-x: auto; }
+
+  .chart { width: 100%; height: auto; }
+  .chart .bar { fill: var(--accent); }
+  .chart .axis { stroke: var(--line); }
+  .chart .tick { fill: var(--muted); font-size: 11px; }
+
+  .strip { width: 300px; height: 44px; display: block; }
+  .strip .slot { fill: var(--line); }
+  .strip .slot.charged { fill: var(--accent); }
+
+  form label { display: block; margin-bottom: 1rem; }
+  form .label { display: block; font-size: .85rem; margin-bottom: .25rem; }
+  form input[type=number], form input[type=text] {
+    width: 12rem; padding: .4rem .5rem; font: inherit;
+    background: var(--bg); color: var(--ink);
+    border: 1px solid var(--line); border-radius: 5px;
+  }
+  form .hint { display: block; color: var(--muted); font-size: .8rem; margin-top: .2rem; }
+  form .error { display: block; color: var(--warn); font-size: .8rem; margin-top: .2rem; }
+  form .toggle { display: flex; gap: .5rem; align-items: center; }
+  button {
+    font: inherit; padding: .45rem 1.1rem; border-radius: 5px;
+    border: 1px solid var(--accent); background: var(--accent); color: var(--panel);
+    cursor: pointer;
+  }
+</style>
+</head>
+<body>
+<header>
+  <h1><a href="{{ url_for('overview') }}">EV Smart Charge</a></h1>
+  <nav>
+    <a href="{{ url_for('overview') }}" {% if page == 'overview' %}class="on"{% endif %}>Overview</a>
+    <a href="{{ url_for('history') }}" {% if page == 'history' %}class="on"{% endif %}>History</a>
+    <a href="{{ url_for('settings_page') }}" {% if page == 'settings' %}class="on"{% endif %}>Settings</a>
+  </nav>
+</header>
+<main>{% block content %}{% endblock %}</main>
+</body>
+</html>

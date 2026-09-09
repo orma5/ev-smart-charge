@@ -25,8 +25,13 @@ RUN uv sync --frozen --no-dev
 # the lockfile on every start for no benefit here.
 ENV PATH="/app/.venv/bin:$PATH"
 
-# Copy your script
-COPY main.py .
+# The application. Listed file by file rather than `COPY . .` so that a stray
+# .env - which exists in local development and holds the API key - cannot be
+# baked into an image that gets pushed to the registry.
+COPY main.py db.py savings.py web.py app.py schema.sql ./
+COPY templates ./templates
 
-# Run script by default when container starts
-ENTRYPOINT ["python", "main.py"]
+# Served by waitress from inside app.py, alongside the scheduler thread.
+EXPOSE 8000
+
+ENTRYPOINT ["python", "app.py"]
