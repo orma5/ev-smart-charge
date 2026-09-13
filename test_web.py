@@ -87,7 +87,20 @@ def test_the_overview_reports_what_was_saved(client):
     body = client.get("/").get_data(as_text=True)
 
     assert "12.30" in body
-    assert "saved vs charging on plug-in" in body
+    assert "Saved vs charging on plug-in" in body
+
+
+def test_the_overview_names_the_decision_it_shows_as_an_icon(client):
+    """The icon is all a sighted reader gets; the words must still be there."""
+    body = client.get("/").get_data(as_text=True)
+
+    assert ">power_off<" in body
+    assert 'aria-label="Not plugged in"' in body
+
+
+def test_every_decision_has_an_icon():
+    """One without would fall back to a question mark on the overview."""
+    assert set(web.DECISION_ICONS) == set(web.DECISIONS)
 
 
 def test_the_overview_says_when_energy_is_an_estimate(client):

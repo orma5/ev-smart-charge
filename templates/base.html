@@ -232,14 +232,12 @@
     button[type=submit] { width: 100%; padding: .8rem; font-size: 1rem; margin-top: .5rem; }
   }
 </style>
+{% block head %}{% endblock %}
 </head>
 <body>
 <header>
   <h1><a href="{{ url_for('overview') }}">EV Smart Charge</a></h1>
-  <!-- Inline SVG rather than an icon font or a sprite, for the same reason the
-       charts are hand-built: three glyphs do not justify a dependency on a LAN
-       application that has to work when the internet does not. Hidden entirely
-       above the phone breakpoint, where the labels do the work. -->
+  <!-- Hidden entirely above the phone breakpoint, where the labels do the work. -->
   <nav>
     <a href="{{ url_for('overview') }}" {% if page == 'overview' %}class="on"{% endif %}>
       <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>

@@ -8,8 +8,7 @@ scheduler needs all of them; a page that polled the car would let an open
 browser tab stop the car from charging. Every screen reads Postgres only.
 
 Charts are inline SVG generated here rather than drawn by a charting library.
-Three screens of bars did not justify a build step, a package.json, or a CDN
-dependency on a LAN application that has to work when the internet does not.
+Three screens of bars did not justify a build step or a package.json.
 """
 from datetime import datetime, timedelta
 
@@ -44,6 +43,20 @@ DECISIONS = {
     "waiting-for-cheaper": "Waiting for a cheaper slot",
     "no-prices": "No prices - left unchanged",
     "error": "Failed",
+}
+
+# The overview shows a decision as an icon alone, with the words above as its
+# tooltip. Material Symbols ligature names.
+DECISION_ICONS = {
+    "cable-disconnected": "power_off",
+    "not-at-home": "wrong_location",
+    "battery-full": "battery_full",
+    "disabled": "pause_circle",
+    "charging-now-no-time": "timer",
+    "charging-cheap-slot": "bolt",
+    "waiting-for-cheaper": "hourglass_top",
+    "no-prices": "money_off",
+    "error": "error",
 }
 
 
@@ -106,6 +119,9 @@ def create_app(config):
     app.jinja_env.filters.update(
         kr=_kr, kwh=_kwh, pct=_pct, when=_when, ago=_ago,
         decision=lambda value: DECISIONS.get(value, value),
+        # A decision added in main.py without an icon here must still show
+        # something, or the one thing the overview is for renders blank.
+        decision_icon=lambda value: DECISION_ICONS.get(value, "help"),
     )
 
     def period():
