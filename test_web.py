@@ -91,13 +91,16 @@ def test_the_overview_reports_what_was_saved(client):
 
 def test_the_overview_says_when_energy_is_an_estimate(client):
     """
-    The number is inferred from state of charge, not metered. Saying so is not
-    decoration - it is the difference between a figure someone can trust and
-    one they will later feel misled by.
+    Where the charger metered the energy the number is measured; where it did
+    not, it is inferred from state of charge. Saying which is not decoration -
+    it is the difference between a figure someone can trust and one they will
+    later feel misled by, and the two are not interchangeable: the metered one
+    is ~10% higher because it counts the charging losses.
     """
     body = client.get("/").get_data(as_text=True)
 
-    assert "there is no meter in the loop" in body
+    assert "charger's own meter" in body
+    assert "estimated" in body
 
 
 def test_the_history_page_renders_sessions_and_runs(client):

@@ -98,10 +98,12 @@ def record_run(conn, run):
             """
             INSERT INTO runs (at, car_captured_at, charging_state,
                               battery_percent, target_percent, slot_start,
-                              decision, quota_remaining, error)
+                              decision, quota_remaining, error,
+                              zaptec_mode, session_energy_kwh)
             VALUES (%(at)s, %(car_captured_at)s, %(charging_state)s,
                     %(battery_percent)s, %(target_percent)s, %(slot_start)s,
-                    %(decision)s, %(quota_remaining)s, %(error)s)
+                    %(decision)s, %(quota_remaining)s, %(error)s,
+                    %(zaptec_mode)s, %(session_energy_kwh)s)
             """,
             run,
         )
@@ -164,11 +166,22 @@ def load_runs(conn, since):
     """
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM runs WHERE at >= %s ORDER BY at", (since,))
-        return cur.fetchall()
+        return [_run(row) for row in cur.fetchall()]
 
 
 def latest_run(conn):
     """The most recent tick, or None if the scheduler has not run yet."""
     with conn.cursor() as cur:
         cur.execute("SELECT * FROM runs ORDER BY at DESC LIMIT 1")
-        return cur.fetchone()
+        return _run(cur.fetchone())
+
+
+def _run(row):
+    """
+    A run row with its numeric as a float, for the same reason load_settings
+    converts: the savings maths is float arithmetic, and a stray Decimal in it
+    raises rather than coercing.
+    """
+    if row is not None and row.get("session_energy_kwh") is not None:
+        row["session_energy_kwh"] = float(row["session_energy_kwh"])
+    return row

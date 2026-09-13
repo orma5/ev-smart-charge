@@ -36,6 +36,7 @@ NBSP = " "
 # because they are a machine's log; these are what a person reads.
 DECISIONS = {
     "cable-disconnected": "Not plugged in",
+    "not-at-home": "Not on the home charger",
     "battery-full": "At target charge",
     "disabled": "Smart charging off",
     "charging-now-no-time": "Charging - too little time to wait",
@@ -57,6 +58,17 @@ def _kwh(value):
     if value is None:
         return DASH
     return f"{value:,.1f}".replace(",", NBSP) + NBSP + "kWh"
+
+
+def _pct(value):
+    """
+    A percentage, or a dash.
+
+    A session can have no percentages at all now: the charger reports a car on
+    it while every Skoda read in the window fails. Rare, but "None%" on a
+    dashboard reads as a bug rather than as missing data.
+    """
+    return DASH if value is None else f"{value}%"
 
 
 def _when(moment):
@@ -92,7 +104,7 @@ def create_app(config):
     """
     app = Flask(__name__)
     app.jinja_env.filters.update(
-        kr=_kr, kwh=_kwh, when=_when, ago=_ago,
+        kr=_kr, kwh=_kwh, pct=_pct, when=_when, ago=_ago,
         decision=lambda value: DECISIONS.get(value, value),
     )
 

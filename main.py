@@ -7,6 +7,7 @@ from dotenv import load_dotenv
 from datetime import datetime, timedelta
 
 import db
+import zaptec
 
 # Load environment variables from .env file (local dev only; in the cluster
 # these come from the CronJob's env and the ev-smart-charge Secret).
@@ -83,6 +84,14 @@ def load_config():
         "SKODA_API_BASE": str,
         "SKODA_API_KEY": str,
         "SKODA_VIN": str,
+        "ZAPTEC_API_BASE": str,
+        "ZAPTEC_USERNAME": str,
+        "ZAPTEC_PASSWORD": str,
+        # Pinned rather than discovered from /api/chargers, which unlike
+        # Skoda's API does offer a list. Pinning is still right: adding a
+        # second charger to the account should not be able to silently change
+        # which one the charging decision is about.
+        "ZAPTEC_CHARGER_ID": str,
         "DATABASE_HOST": str,
         "DATABASE_PORT": int,
         "DATABASE_NAME": str,
@@ -380,6 +389,7 @@ def run_once(conn, config):
     print("** EV Smart charge run started **")
     now = datetime.now()
     skoda = Skoda(config)
+    charger = zaptec.Zaptec(config)
 
     run = {
         "at": now,
@@ -389,12 +399,14 @@ def run_once(conn, config):
         "battery_percent": None,
         "target_percent": None,
         "quota_remaining": None,
+        "zaptec_mode": None,
+        "session_energy_kwh": None,
         "decision": "error",
         "error": None,
     }
 
     try:
-        _decide(conn, config, now, skoda, run)
+        _decide(conn, config, now, skoda, charger, run)
     except SkodaError as exc:
         run["error"] = str(exc)
         raise
@@ -404,9 +416,44 @@ def run_once(conn, config):
         print(f"** EV Smart charge run ended: {run['decision']} **")
 
 
-def _decide(conn, config, now, skoda, run):
+def _at_home(charger, run):
+    """
+    Whether a car is on our charger, recording what the charger said.
+
+    Fails open. An unreachable Zaptec tells us nothing about where the car is,
+    so treating it as "not at home" would stop charging on the strength of a
+    cloud outage - and CLAUDE.md is explicit that this failure has no loud
+    symptom, the car simply does not charge overnight. Returning True puts the
+    tick back on exactly the path it took before Zaptec existed.
+    """
+    try:
+        mode, session_energy = charger.state()
+    except zaptec.ZaptecError as exc:
+        # Not recorded in run["error"]: that column means the tick failed, and
+        # this one is about to carry on and decide perfectly well without it.
+        print(f"Could not read the charger, assuming the car is at home: {exc}")
+        return True
+
+    run.update(zaptec_mode=mode, session_energy_kwh=session_energy)
+    print(f"Charger operating mode: {mode}, session energy: {session_energy} kWh")
+
+    return zaptec.car_connected(mode)
+
+
+def _decide(conn, config, now, skoda, charger, run):
     """The decision itself, filling `run` in as it learns things."""
     settings = db.load_settings(conn)
+
+    # The charger is asked before the car, and this ordering is the point of
+    # the whole integration. The charger knows, immediately and for certain,
+    # whether a car is on it; the car knows only that a cable is in somewhere,
+    # and says so from a snapshot that measurement put at up to 37 minutes old.
+    # Asking here means a tick that finds nothing plugged in at home costs no
+    # Skoda quota at all, which is most ticks.
+    if not _at_home(charger, run):
+        print("No car on the home charger, aborted")
+        run["decision"] = "not-at-home"
+        return
 
     state, battery_percent, target_percent, captured_at = read_charging(skoda.vehicle())
     print(f"Quota remaining this hour: {skoda.remaining}")

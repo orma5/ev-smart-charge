@@ -16,6 +16,7 @@ CREATE TABLE IF NOT EXISTS schema_version (
 );
 
 INSERT INTO schema_version (version) VALUES (1) ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (version) VALUES (2) ON CONFLICT DO NOTHING;
 
 
 -- Exactly one row, enforced by the primary key being a boolean that CHECK
@@ -70,10 +71,29 @@ CREATE TABLE IF NOT EXISTS runs (
     slot_start      timestamp NOT NULL,
     decision        text NOT NULL,
     quota_remaining integer,
-    error           text
+    error           text,
+    -- The charger's ChargerOperatingMode: 0 Unknown, 1 Disconnected,
+    -- 2 Connected_Requesting, 3 Connected_Charging, 5 Connected_Finished.
+    -- This is what says the car is on the charger at HOME, as opposed to
+    -- charging_state above, which only says a cable is in somewhere.
+    --
+    -- Null on two different occasions, and the savings maths has to tell them
+    -- apart: every row written before Zaptec existed, and any later tick where
+    -- the charger could not be reached. Both fall back to charging_state.
+    zaptec_mode     integer,
+    -- Metered kWh for the session in progress, read from the charger rather
+    -- than inferred from the state-of-charge delta. Cumulative within a
+    -- session, so a session's total is the largest value it ever reached.
+    session_energy_kwh numeric
 );
 
 CREATE INDEX IF NOT EXISTS runs_at_idx ON runs (at);
+
+-- For databases created before version 2. Both are no-ops on a fresh one,
+-- which is what keeps this file a single idempotent script rather than a
+-- migration chain.
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS zaptec_mode integer;
+ALTER TABLE runs ADD COLUMN IF NOT EXISTS session_energy_kwh numeric;
 
 
 -- Every price slot we have ever fetched, kept forever.

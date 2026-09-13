@@ -20,9 +20,17 @@ def at(hour, minute, day=30):
     return datetime(2026, 8, day, hour, minute)
 
 
-def run(hour, minute, state, percent, day=30, captured=None, error=None, target=80):
-    """One row of the runs log, in the shape the database returns it."""
-    return {
+def run(hour, minute, state, percent, day=30, captured=None, error=None, target=80,
+        mode=None, metered=None):
+    """
+    One row of the runs log, in the shape the database returns it.
+
+    `mode` and `metered` are left out entirely by default rather than set to
+    None, because that is what a row written before Zaptec existed actually
+    looks like once psycopg hands it over - and the fallback path has to work
+    against the real shape, not a tidied one.
+    """
+    row = {
         "at": at(hour, minute, day),
         "car_captured_at": captured,
         "charging_state": state,
@@ -32,6 +40,11 @@ def run(hour, minute, state, percent, day=30, captured=None, error=None, target=
         "decision": "recorded-by-a-test",
         "error": error,
     }
+    if mode is not None:
+        row["zaptec_mode"] = mode
+    if metered is not None:
+        row["session_energy_kwh"] = metered
+    return row
 
 
 # One night: plugged in at 18:00 at 70%, charged in three cheap small-hours
@@ -106,7 +119,121 @@ def test_the_poll_time_is_used_when_the_car_reports_none():
     assert sessions[0]["started_at"] == at(18, 8)
 
 
+# --- The charger as the connectedness signal --------------------------------
+
+def test_the_charger_closes_a_session_the_car_never_saw_end():
+    """
+    After the gate went in, a tick that finds no car on the charger returns
+    before reading the car at all - so the rows that end a session carry a
+    zaptec_mode and a null charging_state. Read the old way those rows say
+    "could not tell" and the session would run on forever.
+    """
+    sessions = savings.reconstruct_sessions([
+        run(18, 0, "READY_FOR_CHARGING", 70, mode=savings.zaptec.CHARGING),
+        run(19, 0, None, None, mode=savings.zaptec.DISCONNECTED),
+        run(20, 0, None, None, mode=savings.zaptec.DISCONNECTED),
+    ])
+
+    assert len(sessions) == 1
+    assert sessions[0]["ended_at"] == at(18, 0)
+
+
+def test_a_pre_zaptec_log_still_reconstructs():
+    """
+    Every row already in the database has no charger reading. The fallback is
+    per row rather than per session, so history keeps the shape it had.
+    """
+    sessions = savings.reconstruct_sessions(A_NIGHT)
+
+    assert len(sessions) == 1
+    assert sessions[0]["charging_slots"] == [at(2, 0, 31), at(2, 15, 31), at(2, 30, 31)]
+
+
+def test_a_log_spanning_the_changeover_is_one_session():
+    """
+    The deploy lands mid-session: earlier rows have only charging_state, later
+    ones have both. Neither half may open a second session.
+    """
+    sessions = savings.reconstruct_sessions([
+        run(18, 0, "READY_FOR_CHARGING", 70),
+        run(19, 0, "CHARGING", 74, mode=savings.zaptec.CHARGING),
+        run(20, 0, None, None, mode=savings.zaptec.DISCONNECTED),
+    ])
+
+    assert len(sessions) == 1
+    assert sessions[0]["charging_slots"] == [at(19, 0)]
+
+
+def test_the_charger_outvotes_a_stale_car_state():
+    """
+    The whole reason for preferring it. The car's snapshot can be half an hour
+    old and still say CONNECT_CABLE after the cable went in; the charger knows
+    immediately.
+    """
+    sessions = savings.reconstruct_sessions([
+        run(18, 0, "CONNECT_CABLE", 70, mode=savings.zaptec.CHARGING),
+    ])
+
+    assert len(sessions) == 1
+
+
+def test_a_session_with_no_successful_car_read_does_not_crash():
+    """
+    Newly possible: the charger reports a car while every Skoda request in the
+    window fails. Before the gate a session could only be opened by a reading
+    that had already succeeded, so this shape could not occur.
+    """
+    session = savings.reconstruct_sessions([
+        run(18, 0, None, None, mode=savings.zaptec.CHARGING, metered=4.0,
+            error="could not reach the Skoda API"),
+    ])[0]
+
+    assert session["start_percent"] is None
+    assert session["started_at"] == at(18, 0)
+    assert savings.session_energy_kwh(session, 82.0) == 4.0
+
+
 # --- Energy -----------------------------------------------------------------
+
+def test_the_meter_wins_over_the_state_of_charge_delta():
+    """
+    Metered reads higher than inferred - it counts the conversion and thermal
+    losses that never reach the battery - so this is not a tie-break between
+    two estimates of the same quantity. It is the quantity you are billed for.
+    """
+    session = savings.reconstruct_sessions([
+        run(18, 0, "READY_FOR_CHARGING", 70, mode=savings.zaptec.CHARGING, metered=0.0),
+        run(19, 0, "READY_FOR_CHARGING", 80, mode=savings.zaptec.CHARGING, metered=9.1),
+    ])[0]
+
+    # The delta says 8.2 kWh; the meter says 9.1 and wins.
+    assert savings.session_energy_kwh(session, 82.0) == pytest.approx(9.1)
+
+
+def test_a_counter_reset_mid_session_is_summed_not_maximised():
+    """
+    Smart charging stops and restarts the car several times a night. If the
+    charger treats a restart as a new session its counter goes back to zero
+    inside ours, and taking the maximum would silently discard everything
+    before the reset.
+    """
+    session = savings.reconstruct_sessions([
+        run(18, 0, "CHARGING", 70, mode=savings.zaptec.CHARGING, metered=5.0),
+        run(19, 0, "CHARGING", 74, mode=savings.zaptec.CHARGING, metered=1.0),
+        run(20, 0, "CHARGING", 78, mode=savings.zaptec.CHARGING, metered=3.0),
+    ])[0]
+
+    assert savings.session_energy_kwh(session, 82.0) == pytest.approx(8.0)
+
+
+def test_a_session_the_charger_never_metered_falls_back_to_the_delta():
+    session = savings.reconstruct_sessions([
+        run(18, 0, "READY_FOR_CHARGING", 70, mode=savings.zaptec.CHARGING),
+        run(19, 0, "READY_FOR_CHARGING", 80, mode=savings.zaptec.CHARGING),
+    ])[0]
+
+    assert savings.session_energy_kwh(session, 82.0) == pytest.approx(8.2)
+
 
 def test_energy_comes_from_the_state_of_charge_delta():
     session = savings.reconstruct_sessions(A_NIGHT)[0]

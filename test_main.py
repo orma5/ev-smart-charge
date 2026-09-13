@@ -10,6 +10,7 @@ from datetime import datetime
 import pytest
 
 import main
+import zaptec
 
 
 def slots(*specs):
@@ -391,20 +392,34 @@ SETTINGS = {
     "smart_charging_enabled": True,
 }
 
-RUN_CONFIG = dict(CONFIG, PRICE_ZONE="SE3", PRICE_BASE_URL="https://prices.example/")
+RUN_CONFIG = dict(
+    CONFIG,
+    PRICE_ZONE="SE3",
+    PRICE_BASE_URL="https://prices.example/",
+    ZAPTEC_API_BASE="https://zaptec.example",
+    ZAPTEC_USERNAME="user",
+    ZAPTEC_PASSWORD="secret",
+    ZAPTEC_CHARGER_ID="charger-uuid",
+)
 
 
 def run_tick(monkeypatch, state, percent, target=80, settings=None, prices=None,
-             vehicle=None, commands=None, recorded=None):
+             vehicle=None, commands=None, recorded=None, charger=None):
     """
     Drive run_once() with the database and the network stubbed.
 
     Returns (recorded, commands). Both lists can be passed in, so a test whose
     tick raises can still inspect what was written before the exception.
+
+    The charger defaults to Connected_Charging, because every test written
+    before Zaptec existed assumes the car is at home and should keep meaning
+    what it meant. Pass `charger` to say otherwise.
     """
     recorded = [] if recorded is None else recorded
     commands = [] if commands is None else commands
 
+    monkeypatch.setattr(main.zaptec.Zaptec, "state",
+                        charger or (lambda self: (zaptec.CHARGING, None)))
     monkeypatch.setattr(main.db, "load_settings",
                         lambda conn: dict(SETTINGS, **(settings or {})))
     monkeypatch.setattr(main.db, "record_run",
@@ -419,6 +434,78 @@ def run_tick(monkeypatch, state, percent, target=80, settings=None, prices=None,
 
     main.run_once(object(), RUN_CONFIG)
     return recorded, commands
+
+
+# --- The home-charger gate --------------------------------------------------
+
+def test_no_car_on_the_charger_spends_no_skoda_request(monkeypatch):
+    """
+    The point of asking the charger first. On most ticks nothing is plugged in
+    at home, and those ticks must cost nothing from the 20-an-hour budget - so
+    this asserts the Skoda client was never called, not merely that the
+    decision came out right.
+    """
+    def must_not_be_called(self):
+        raise AssertionError("the car was read despite no car on the charger")
+
+    recorded, commands = run_tick(
+        monkeypatch, "CHARGING", 40,
+        charger=lambda self: (zaptec.DISCONNECTED, None),
+        vehicle=must_not_be_called,
+    )
+
+    assert commands == []
+    assert recorded[0]["decision"] == "not-at-home"
+    assert recorded[0]["zaptec_mode"] == zaptec.DISCONNECTED
+    assert recorded[0]["charging_state"] is None
+
+
+def test_an_unreachable_charger_charges_anyway(monkeypatch):
+    """
+    Fail open, and the reason is asymmetric cost. A charger that cannot be
+    reached says nothing about where the car is; refusing to charge on that
+    basis would lose a night's cheap electricity to a cloud outage, and the
+    failure is silent - nobody finds out until the morning.
+    """
+    def unreachable(self):
+        raise zaptec.ZaptecError("could not reach Zaptec")
+
+    monkeypatch.setattr(main, "datetime", frozen(datetime(2026, 8, 30, 6, 0)))
+    recorded, commands = run_tick(
+        monkeypatch, "READY_FOR_CHARGING", 79, charger=unreachable,
+        prices=slots((6, 0, 0.10), (6, 15, 0.90), (6, 30, 0.90), (6, 45, 0.90)),
+    )
+
+    assert commands == ["ON"]
+    assert recorded[0]["decision"] == "charging-cheap-slot"
+    # Recorded as unknown rather than as a failure: the tick decided perfectly
+    # well without it, so run["error"] would misrepresent what happened.
+    assert recorded[0]["zaptec_mode"] is None
+    assert recorded[0]["error"] is None
+
+
+def test_an_unknown_charger_mode_reads_as_at_home(monkeypatch):
+    """
+    Mode 0 is the charger saying it does not know. Tested by exclusion for the
+    same reason main.CABLE_DISCONNECTED is: only an explicit Disconnected means
+    the car is elsewhere, so a value we do not recognise cannot stop a charge.
+    """
+    recorded, commands = run_tick(
+        monkeypatch, "READY_FOR_CHARGING", 80, target=80,
+        charger=lambda self: (0, None),
+    )
+
+    assert recorded[0]["decision"] == "battery-full"
+    assert recorded[0]["zaptec_mode"] == 0
+
+
+def test_the_metered_energy_is_recorded(monkeypatch):
+    recorded, _ = run_tick(
+        monkeypatch, "READY_FOR_CHARGING", 80, target=80,
+        charger=lambda self: (zaptec.CHARGING, 12.5),
+    )
+
+    assert recorded[0]["session_energy_kwh"] == 12.5
 
 
 def test_an_unplugged_car_is_recorded_and_commands_nothing(monkeypatch):

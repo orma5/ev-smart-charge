@@ -67,9 +67,12 @@
 
   <p class="note">
     The comparison is against charging flat out from the moment the cable went in until
-    the car reached its target. Energy is estimated from the car's state of charge and the
-    battery size in settings — there is no meter in the loop — so treat these as close,
-    not exact.
+    the car reached its target. Energy comes from the charger's own meter where it
+    reported one; for sessions charged before the charger was wired in, it is estimated
+    from the car's state of charge and the battery size in settings, so treat those as
+    close rather than exact. Metered sessions read a little higher than estimated ones,
+    because the meter counts the charging losses that never reach the battery — which is
+    the figure you are actually billed for.
   </p>
 </div>
 
@@ -90,7 +93,7 @@
         {% for session in sessions %}
           <tr>
             <td>{{ session.started_at | when }}</td>
-            <td class="num">{{ session.start_percent }}% → {{ session.end_percent }}%</td>
+            <td class="num">{{ session.start_percent | pct }} → {{ session.end_percent | pct }}</td>
             <td class="num">{{ session.energy_kwh | kwh }}</td>
             <td class="num">{{ session.actual_cost | kr }}</td>
             <td class="num">{{ session.savings | kr }}</td>
