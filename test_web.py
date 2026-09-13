@@ -166,6 +166,37 @@ def test_the_history_page_renders_sessions_and_runs(client):
     assert "<svg" in body
 
 
+def test_repeated_decisions_collapse_into_one_row():
+    """
+    A night of waiting is a hundred identical ticks. Merged, the rows that
+    differ are the ones left to read.
+    """
+    rows = web.collapse_runs(A_NIGHT)
+
+    assert [row["decision"] for row in rows] == [
+        "cable-disconnected",
+        "battery-full",
+        "charging-cheap-slot",
+        "waiting-for-cheaper",
+        "cable-disconnected",
+    ]
+
+    charging = rows[2]
+    assert charging["count"] == 3
+    assert (charging["started_at"], charging["ended_at"]) == (at(2, 0, day=31), at(2, 30, day=31))
+    assert (charging["start_percent"], charging["end_percent"]) == (70, 77)
+
+
+def test_failures_are_never_collapsed():
+    """Each failure carries its own message, and they are what the list is for."""
+    failed = [
+        run(18, 0, None, None, decision="error", error="timed out"),
+        run(18, 4, None, None, decision="error", error="timed out"),
+    ]
+
+    assert len(web.collapse_runs(failed)) == 2
+
+
 def test_a_failed_run_is_visible_in_the_history(monkeypatch, client):
     """The whole point of recording failures: they used to be invisible."""
     monkeypatch.setattr(db, "load_runs", lambda conn, since: [

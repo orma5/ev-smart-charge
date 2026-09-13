@@ -83,27 +83,50 @@
     margin-bottom: 1rem;
   }
 
-  .figures { display: flex; flex-wrap: wrap; gap: 2rem; }
-  .figure .value { font-size: 1.6rem; font-variant-numeric: tabular-nums; }
-  .figure .value.big { font-size: 2.2rem; color: var(--accent); }
-  .figure .label { color: var(--muted); font-size: .82rem; }
+  /* A section heading with its control on the same line - the period picker,
+     or a link onwards - rather than a row of small links under the content. */
+  .head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; margin: 2rem 0 .75rem; }
+  .head h2 { margin: 0; }
+  .head:first-child { margin-top: 0; }
+
+  .period { display: flex; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .period a { min-width: 3rem; padding: .3rem .7rem; text-align: center; font-size: .85rem; color: var(--muted); text-decoration: none; }
+  .period a + a { border-left: 1px solid var(--line); }
+  .period a.on { background: var(--accent-soft); color: var(--ink); }
+
+  .headline { font-size: 1.5rem; line-height: 1.3; font-variant-numeric: tabular-nums; }
+  .big { font-size: 2.2rem; line-height: 1.2; color: var(--accent); font-variant-numeric: tabular-nums; }
+  .sub { color: var(--muted); font-size: .82rem; }
+  .summary { margin: .6rem 0 0; }
 
   .note { color: var(--muted); font-size: .82rem; margin: .5rem 0 0; }
   .warn { color: var(--warn); }
 
-  table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; }
-  th, td { text-align: left; padding: .45rem .6rem; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-weight: 500; font-size: .8rem; }
-  td.num, th.num { text-align: right; }
-  /* Wide tables scroll inside their own box rather than the page. */
-  .scroll { overflow-x: auto; }
+  /* Lists rather than tables: on a phone the tables wrapped every date onto
+     three lines and still scrolled sideways. A row is the thing on the left
+     and its figure on the right. */
+  .row, .list li { display: flex; justify-content: space-between; align-items: baseline; gap: 1rem; }
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list li { padding: .6rem 0; border-bottom: 1px solid var(--line); }
+  .list li:last-child { border-bottom: 0; }
+  .end { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 
-  .chart { width: 100%; height: auto; }
+  /* The runs log: time, what it decided, battery. A heading per day, so the
+     date is not repeated on every row. */
+  .runs li { display: grid; grid-template-columns: 3.2rem 1fr auto; gap: .75rem; }
+  .runs .time { color: var(--muted); font-variant-numeric: tabular-nums; }
+  .list li.day {
+    display: block; padding: 1rem 0 .2rem; border-bottom: 0;
+    color: var(--muted); font-size: .75rem; text-transform: uppercase; letter-spacing: .04em;
+  }
+  .list li.day:first-child { padding-top: 0; }
+
+  .chart svg { display: block; width: 100%; height: 120px; margin-top: 1rem; }
   .chart .bar { fill: var(--accent); }
   .chart .axis { stroke: var(--line); }
-  .chart .tick { fill: var(--muted); font-size: 11px; }
+  .chart .ticks { display: flex; justify-content: space-between; color: var(--muted); font-size: .75rem; }
 
-  .strip { width: 300px; height: 44px; display: block; }
+  .strip { display: block; width: 100%; height: 44px; margin-top: .75rem; }
   .strip .slot { fill: var(--line); }
   .strip .slot.charged { fill: var(--accent); }
 
@@ -161,25 +184,18 @@
      in a top bar are the furthest point from a thumb on a 6" screen, and the
      desktop spacing wastes a third of the viewport before the first number.
      Below this width the nav moves to the bottom as tabs and the padding
-     tightens. 560px rather than a device size: it is where the four headline
-     figures stop fitting two-up. */
+     tightens. 560px rather than a device size. */
   @media (max-width: 560px) {
     header { padding: .85rem 1rem; }
     main { padding: 1rem; padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
     h2 { margin: 1.5rem 0 .6rem; }
+    .head { margin: 1.5rem 0 .6rem; }
     .panel { padding: .9rem 1rem; border-radius: 10px; }
 
-    /* Two up rather than a wrapping flex row, so the figures line up in a
-       grid instead of drifting by label length. */
-    .figures { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
-    .figure .value { font-size: 1.35rem; }
-    .figure .value.big { font-size: 1.9rem; }
-    /* The savings headline gets the full width; it is the one number anyone
-       opens this to see. */
-    .figures .figure:first-child:has(.big) { grid-column: 1 / -1; }
-
-    /* Fixed 300px overflowed a 360px-wide phone once the panel had padding. */
-    .strip { width: 100%; max-width: 100%; }
+    .headline { font-size: 1.3rem; }
+    .big { font-size: 1.9rem; }
+    /* 40px tall: the picker is the one control on these pages. */
+    .period a { padding: .5rem .8rem; }
 
     nav {
       position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;

@@ -6,50 +6,38 @@
 <h2>Right now</h2>
 <div class="panel">
   {% if latest %}
-    <div class="figures">
-      <div class="figure">
-        <div class="value">{{ latest.battery_percent if latest.battery_percent is not none else '—' }}{% if latest.battery_percent is not none %}%{% endif %}</div>
-        <div class="label">battery{% if latest.target_percent %}, target {{ latest.target_percent }}%{% endif %}</div>
-      </div>
-      <div class="figure">
-        <div class="value">{{ latest.decision | decision }}</div>
-        <div class="label">
-          last checked {{ latest.at | ago }}
-          {%- if latest.quota_remaining is not none %} · {{ latest.quota_remaining }} API requests left this hour{% endif %}
-        </div>
-      </div>
+    <div class="headline">{{ latest.decision | decision }}</div>
+    <div class="sub">
+      Battery {{ latest.battery_percent | pct }}
+      {%- if latest.target_percent %}, target {{ latest.target_percent }}%{% endif %}
+      · checked {{ latest.at | ago }}
     </div>
     {% if latest.error %}
       <p class="note warn">{{ latest.error }}</p>
     {% endif %}
     {% if not settings.smart_charging_enabled %}
-      <p class="note warn">Smart charging is switched off, so the car is left to charge whenever it likes.</p>
+      <p class="note warn">Smart charging is off, so the car charges whenever it likes.</p>
     {% endif %}
   {% else %}
     <p class="note">No runs recorded yet. The scheduler writes one every four minutes.</p>
   {% endif %}
 </div>
 
-<h2>Saved over the last {{ days }} days</h2>
-<div class="panel">
-  <div class="figures">
-    <div class="figure">
-      <div class="value big">{{ totals.savings | kr }}</div>
-      <div class="label">saved vs charging on plug-in</div>
-    </div>
-    <div class="figure">
-      <div class="value">{{ totals.actual_cost | kr }}</div>
-      <div class="label">actually spent</div>
-    </div>
-    <div class="figure">
-      <div class="value">{{ totals.baseline_cost | kr }}</div>
-      <div class="label">it would have cost</div>
-    </div>
-    <div class="figure">
-      <div class="value">{{ totals.energy_kwh | kwh }}</div>
-      <div class="label">charged over {{ totals.sessions }} session{{ '' if totals.sessions == 1 else 's' }}</div>
-    </div>
+<div class="head">
+  <h2>Saved</h2>
+  <div class="period">
+    {% for n in (7, 30, 90) %}
+      <a href="{{ url_for('overview', days=n) }}" {% if days == n %}class="on"{% endif %}>{{ n }}d</a>
+    {% endfor %}
   </div>
+</div>
+<div class="panel">
+  <div class="big">{{ totals.savings | kr }}</div>
+  <div class="sub">saved vs charging on plug-in</div>
+  <p class="summary">
+    Spent {{ totals.actual_cost | kr }} instead of {{ totals.baseline_cost | kr }}
+    · {{ totals.energy_kwh | kwh }} over {{ totals.sessions }} session{{ '' if totals.sessions == 1 else 's' }}
+  </p>
 
   {% if chart %}
     {{ chart }}
@@ -59,58 +47,50 @@
 
   {% if totals.unpriced %}
     <p class="note warn">
-      {{ totals.unpriced }} session{{ '' if totals.unpriced == 1 else 's' }} could not be
-      priced, because spot prices are missing for some of the slots involved. Those are
-      left out of the totals above rather than counted as zero.
+      {{ totals.unpriced }} session{{ ' is' if totals.unpriced == 1 else 's are' }} left out of
+      these totals: spot prices are missing for some of the slots involved.
     </p>
   {% endif %}
 
-  <p class="note">
-    The comparison is against charging flat out from the moment the cable went in until
-    the car reached its target. Energy comes from the charger's own meter where it
-    reported one; for sessions charged before the charger was wired in, it is estimated
-    from the car's state of charge and the battery size in settings, so treat those as
-    close rather than exact. Metered sessions read a little higher than estimated ones,
-    because the meter counts the charging losses that never reach the battery — which is
-    the figure you are actually billed for.
-  </p>
+  <details class="about">
+    <summary>How this is calculated</summary>
+    <p>
+      The comparison is against charging flat out from the moment the cable went in until
+      the car reached its target. Energy comes from the charger's own meter where it
+      reported one; for sessions charged before the charger was wired in, it is estimated
+      from the car's state of charge and the battery size in settings, so treat those as
+      close rather than exact. Metered sessions read a little higher than estimated ones,
+      because the meter counts the charging losses that never reach the battery — which is
+      the figure you are actually billed for.
+    </p>
+  </details>
 </div>
 
 {% if sessions %}
-  <h2>Latest sessions</h2>
-  <div class="panel scroll">
-    <table>
-      <thead>
-        <tr>
-          <th>Plugged in</th>
-          <th class="num">Charge</th>
-          <th class="num">Energy</th>
-          <th class="num">Cost</th>
-          <th class="num">Saved</th>
-        </tr>
-      </thead>
-      <tbody>
-        {% for session in sessions %}
-          <tr>
-            <td>{{ session.started_at | when }}</td>
-            <td class="num">{{ session.start_percent | pct }} → {{ session.end_percent | pct }}</td>
-            <td class="num">{{ session.energy_kwh | kwh }}</td>
-            <td class="num">{{ session.actual_cost | kr }}</td>
-            <td class="num">{{ session.savings | kr }}</td>
-          </tr>
-        {% endfor %}
-      </tbody>
-    </table>
+  <div class="head">
+    <h2>Latest sessions</h2>
+    <a href="{{ url_for('history', days=days) }}">All →</a>
   </div>
-  <p class="note"><a href="{{ url_for('history', days=days) }}">All sessions and every run →</a></p>
+  <div class="panel">
+    <ul class="list">
+      {% for session in sessions %}
+        <li>
+          <div>
+            <div>{{ session.started_at | when }}</div>
+            <div class="sub">
+              {{ session.start_percent | pct }} → {{ session.end_percent | pct }}
+              · {{ session.energy_kwh | kwh }} · cost {{ session.actual_cost | kr }}
+            </div>
+          </div>
+          <div class="end">
+            <div>{{ session.savings | kr }}</div>
+            <div class="sub">saved</div>
+          </div>
+        </li>
+      {% endfor %}
+    </ul>
+  </div>
 {% endif %}
-
-<p class="note">
-  Showing {{ days }} days.
-  <a href="{{ url_for('overview', days=7) }}">7</a> ·
-  <a href="{{ url_for('overview', days=30) }}">30</a> ·
-  <a href="{{ url_for('overview', days=90) }}">90</a>
-</p>
 
 <script>
   // "Last checked 2 min ago" is true when the page renders and a lie five

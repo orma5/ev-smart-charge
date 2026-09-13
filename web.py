@@ -161,7 +161,7 @@ def create_app(config):
             ],
             # Newest first, and capped: this is for spotting the failures the
             # CronJob used to hide, not for reading a month of ticks.
-            recent=list(reversed(runs))[:60],
+            recent=collapse_runs(runs)[:60],
         )
 
     @app.route("/settings", methods=["GET", "POST"])
@@ -218,6 +218,48 @@ def _totals(sessions):
     }
 
 
+def collapse_runs(runs):
+    """
+    The runs log for reading: newest first, with back-to-back runs that saw
+    the same state and decided the same thing merged into one row.
+
+    At a tick every four minutes a night of waiting is a hundred identical
+    rows, and a page of those buries the one row that differs. Failures are
+    never merged - each carries its own message, and they are what this list
+    is for.
+
+    `runs` must be ordered oldest first, as db.load_runs returns them.
+    """
+    rows = []
+    for run in runs:
+        last = rows[-1] if rows else None
+        percent = run["battery_percent"]
+
+        if (last is not None and not run["error"] and not last["error"]
+                and run["decision"] == last["decision"]
+                and run["charging_state"] == last["charging_state"]):
+            last["ended_at"] = run["at"]
+            last["count"] += 1
+            if percent is not None:
+                last["end_percent"] = percent
+                if last["start_percent"] is None:
+                    last["start_percent"] = percent
+            continue
+
+        rows.append({
+            "started_at": run["at"],
+            "ended_at": run["at"],
+            "count": 1,
+            "decision": run["decision"],
+            "charging_state": run["charging_state"],
+            "error": run["error"],
+            "start_percent": percent,
+            "end_percent": percent,
+        })
+
+    return list(reversed(rows))
+
+
 # --- Form parsing -----------------------------------------------------------
 
 # name -> (label, cast, low, high). The bounds are what makes a typo in a text
@@ -269,7 +311,7 @@ def parse_settings(form):
 # Plain SVG built as strings. Colours come from CSS custom properties so the
 # charts follow the page into dark mode instead of needing a second palette.
 
-def daily_savings_chart(sessions, width=760, height=190):
+def daily_savings_chart(sessions, width=760, height=120):
     """Savings per day across the window, one bar per day that had a session."""
     by_day = {}
     for session in sessions:
@@ -282,13 +324,18 @@ def daily_savings_chart(sessions, width=760, height=190):
 
     days = sorted(by_day)
     top = max(max(by_day.values()), 0.01)
-    pad_bottom, pad_top = 22, 8
+    pad_bottom, pad_top = 1, 8
     plot = height - pad_bottom - pad_top
     step = width / len(days)
     bar = max(2.0, min(step - 3, 26.0))
 
+    # Stretched to the box CSS gives it rather than scaled, so a phone gets the
+    # same bar height as a desktop instead of a chart a third as tall. That is
+    # also why the date labels are HTML below it: text inside a scaled-down
+    # SVG shrank to about 4px on a phone.
     parts = [
-        f'<svg viewBox="0 0 {width} {height}" class="chart" role="img"'
+        '<div class="chart">'
+        f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" role="img"'
         f' aria-label="Savings per day in kronor">'
     ]
 
@@ -297,7 +344,7 @@ def daily_savings_chart(sessions, width=760, height=190):
     # outcome and should read as zero rather than as missing.
     parts.append(
         f'<line x1="0" y1="{pad_top + plot}" x2="{width}" y2="{pad_top + plot}"'
-        f' class="axis"/>'
+        f' class="axis" vector-effect="non-scaling-stroke"/>'
     )
 
     for index, day in enumerate(days):
@@ -310,18 +357,15 @@ def daily_savings_chart(sessions, width=760, height=190):
             f' rx="2" class="bar"><title>{day:%a %d %b}: {value:.2f} kr</title></rect>'
         )
 
+    parts.append("</svg>")
+
     # Label the ends only. Anything denser overlaps at a month's width, and the
     # per-bar tooltips carry the exact dates anyway.
-    parts.append(
-        f'<text x="0" y="{height - 6}" class="tick">{days[0]:%d %b}</text>'
-    )
+    parts.append(f'<div class="ticks"><span>{days[0]:%d %b}</span>')
     if len(days) > 1:
-        parts.append(
-            f'<text x="{width}" y="{height - 6}" class="tick" text-anchor="end">'
-            f'{days[-1]:%d %b}</text>'
-        )
+        parts.append(f'<span>{days[-1]:%d %b}</span>')
+    parts.append("</div></div>")
 
-    parts.append("</svg>")
     return Markup("".join(parts))
 
 
@@ -345,7 +389,7 @@ def session_chart(session, prices, width=300, height=44):
     bar = max(1.0, step - 0.6)
 
     parts = [
-        f'<svg viewBox="0 0 {width} {height}" class="strip" role="img"'
+        f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" class="strip" role="img"'
         f' aria-label="Price per slot, with charging slots highlighted">'
     ]
     for index, (slot, price) in enumerate(priced):

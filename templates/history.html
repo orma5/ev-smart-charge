@@ -3,7 +3,14 @@
 
 {% block content %}
 
-<h2>Charging sessions</h2>
+<div class="head">
+  <h2>Charging sessions</h2>
+  <div class="period">
+    {% for n in (7, 30, 90) %}
+      <a href="{{ url_for('history', days=n) }}" {% if days == n %}class="on"{% endif %}>{{ n }}d</a>
+    {% endfor %}
+  </div>
+</div>
 
 {% if not sessions %}
   <div class="panel">
@@ -13,71 +20,68 @@
 
 {% for session, strip in sessions %}
   <div class="panel">
-    <div class="figures">
-      <div class="figure">
-        <div class="value">{{ session.savings | kr }}</div>
-        <div class="label">saved</div>
+    <div class="row">
+      <div>
+        <div>{{ session.started_at | when }}</div>
+        <div class="sub">unplugged {{ session.ended_at | when }}</div>
       </div>
-      <div class="figure">
-        <div class="value">{{ session.energy_kwh | kwh }}</div>
-        <div class="label">{{ session.start_percent | pct }} → {{ session.end_percent | pct }}</div>
+      <div class="end">
+        <div class="headline">{{ session.savings | kr }}</div>
+        <div class="sub">saved</div>
       </div>
-      <div class="figure">
-        <div class="value">{{ session.actual_cost | kr }}</div>
-        <div class="label">instead of {{ session.baseline_cost | kr }}</div>
-      </div>
-      {% if strip %}
-        <div class="figure">
-          {{ strip }}
-          <div class="label">price per slot; charged where highlighted</div>
-        </div>
-      {% endif %}
     </div>
-    <p class="note">
-      Plugged in {{ session.started_at | when }}, unplugged {{ session.ended_at | when }}.
-      {%- if session.savings is none %}
-        Not priced: spot prices are missing for some of the slots involved.
-      {% endif %}
-      {%- if session.error_count %}
-        {{ session.error_count }} run{{ '' if session.error_count == 1 else 's' }} failed during this session.
-      {% endif %}
+    {% if strip %}
+      {{ strip }}
+      <div class="sub">price per slot; charged where highlighted</div>
+    {% endif %}
+    <p class="summary">
+      {{ session.energy_kwh | kwh }} · {{ session.start_percent | pct }} → {{ session.end_percent | pct }}
+      · cost {{ session.actual_cost | kr }} instead of {{ session.baseline_cost | kr }}
     </p>
+    {% if session.savings is none %}
+      <p class="note warn">Not priced: spot prices are missing for some of the slots involved.</p>
+    {% endif %}
+    {% if session.error_count %}
+      <p class="note warn">{{ session.error_count }} run{{ '' if session.error_count == 1 else 's' }} failed during this session.</p>
+    {% endif %}
   </div>
 {% endfor %}
 
 <h2>Recent runs</h2>
-<div class="panel scroll">
-  <table>
-    <thead>
-      <tr>
-        <th>When</th>
-        <th>State</th>
-        <th class="num">Battery</th>
-        <th>Decision</th>
-      </tr>
-    </thead>
-    <tbody>
-      {% for run in recent %}
-        <tr>
-          <td>{{ run.at | when }}</td>
-          <td>{{ run.charging_state or '—' }}</td>
-          <td class="num">{{ run.battery_percent | pct }}</td>
-          <td {% if run.error %}class="warn"{% endif %}>
-            {{ run.decision | decision }}{% if run.error %} — {{ run.error }}{% endif %}
-          </td>
-        </tr>
-      {% else %}
-        <tr><td colspan="4" class="note">Nothing recorded yet.</td></tr>
-      {% endfor %}
-    </tbody>
-  </table>
+<div class="panel">
+  <ul class="list runs">
+    {% for row in recent %}
+      {% if loop.first or row.started_at.date() != loop.previtem.started_at.date() %}
+        <li class="day">{{ row.started_at.strftime('%a %d %b') }}</li>
+      {% endif %}
+      <li>
+        <span class="time">{{ row.started_at.strftime('%H:%M') }}</span>
+        <div>
+          <div {% if row.error %}class="warn"{% endif %}>{{ row.decision | decision }}</div>
+          {% if row.count > 1 or row.charging_state %}
+            <div class="sub">
+              {%- if row.count > 1 -%}
+                to {{ row.ended_at.strftime('%H:%M' if row.ended_at.date() == row.started_at.date() else '%a %H:%M') }},
+                {{ row.count }} runs
+                {%- if row.charging_state %} · {% endif -%}
+              {%- endif -%}
+              {{ row.charging_state or '' }}
+            </div>
+          {% endif %}
+          {% if row.error %}<div class="sub warn">{{ row.error }}</div>{% endif %}
+        </div>
+        <span class="end">
+          {%- if row.start_percent != row.end_percent -%}
+            {{ row.start_percent | pct }} → {{ row.end_percent | pct }}
+          {%- else -%}
+            {{ row.end_percent | pct }}
+          {%- endif -%}
+        </span>
+      </li>
+    {% else %}
+      <li class="note">Nothing recorded yet.</li>
+    {% endfor %}
+  </ul>
 </div>
-
-<p class="note">
-  Showing {{ days }} days.
-  <a href="{{ url_for('history', days=7) }}">7</a> ·
-  <a href="{{ url_for('history', days=30) }}">30</a> ·
-  <a href="{{ url_for('history', days=90) }}">90</a>
-</p>
 
 {% endblock %}
