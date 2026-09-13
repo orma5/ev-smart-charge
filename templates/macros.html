@@ -1,0 +1,5 @@
+{#- Every icon carries its words as an accessible name and a tooltip, since
+    nothing else on the page says what it means. #}
+{% macro icon(name, label) -%}
+  <span class="ms" role="img" aria-label="{{ label }}" title="{{ label }}">{{ name }}</span>
+{%- endmacro %}

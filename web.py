@@ -45,8 +45,8 @@ DECISIONS = {
     "error": "Failed",
 }
 
-# The overview shows a decision as an icon alone, with the words above as its
-# tooltip. Material Symbols ligature names.
+# The overview and history show a decision as an icon alone, with the words
+# above as its tooltip. Material Symbols ligature names.
 DECISION_ICONS = {
     "cable-disconnected": "power_off",
     "not-at-home": "wrong_location",

@@ -179,6 +179,13 @@ def test_the_history_page_renders_sessions_and_runs(client):
     assert "<svg" in body
 
 
+def test_the_history_names_each_decision_it_shows_as_an_icon(client):
+    body = client.get("/history").get_data(as_text=True)
+
+    assert ">hourglass_top<" in body
+    assert 'aria-label="Waiting for a cheaper slot"' in body
+
+
 def test_repeated_decisions_collapse_into_one_row():
     """
     A night of waiting is a hundred identical ticks. Merged, the rows that
