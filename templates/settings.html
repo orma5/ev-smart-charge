@@ -43,7 +43,7 @@
       <span class="label">Battery capacity (kWh)</span>
       <input type="number" name="battery_capacity_kwh" min="1" max="500" step="0.1"
              inputmode="decimal" value="{{ settings.battery_capacity_kwh }}">
-      <span class="hint">Scales every energy and savings figure.</span>
+      <span class="hint">Plans charge time; also prices unmetered sessions.</span>
       {% if problems.battery_capacity_kwh %}<span class="error">{{ problems.battery_capacity_kwh }}</span>{% endif %}
     </label>
 
@@ -73,8 +73,10 @@
   </p>
   <p>
     <strong>Battery capacity</strong> turns a change in state of charge into
-    kilowatt-hours. It only matters for sessions the charger did not meter itself —
-    where it did, the measured figure is used instead.
+    kilowatt-hours, which decides how long a charge will take and therefore how many
+    cheap slots it needs. For the savings figures it is now only a fallback: where the
+    charger metered a session itself, that measurement is used instead, and it reads
+    around a tenth higher because it counts the losses that never reach the battery.
   </p>
   <p>
     <strong>Charge limit fallback</strong> usually has no effect. The car reports its

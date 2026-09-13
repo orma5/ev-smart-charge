@@ -116,6 +116,14 @@ Configuration is split by who owns it, and the split matters: anything a person 
 **The `settings` table** — user preferences, edited at `/settings`, seeded from the column defaults in `schema.sql` on first boot:
 - `departure_hour`, `charger_speed_kw`, `battery_capacity_kwh`
 - `charge_limit_percent` — fallback only; the car's own `targetStateOfChargeInPercent` wins when reported
+
+Two notes on the pair above, because both look more removable than they are now that Zaptec meters the energy.
+
+`battery_capacity_kwh` **is** now a fallback in `savings` — the meter has replaced it for any session the charger recorded — but it is still load-bearing in the decision, where it turns a state-of-charge delta into the kWh that sets how many slots are needed. Zaptec cannot supply it: the charger has no idea how big the battery is, and neither does Skoda's API.
+
+`charger_speed_kw` is likewise irreplaceable at planning time, because the car is usually `READY_FOR_CHARGING` when the decision runs and there is no power being delivered to measure.
+
+The redundancy that *does* exist is between the two of them. `slots_needed_to_charge` reduces to `(capacity / speed) × ΔSoC/100`, so only their **ratio** ever reaches a decision — 82 kWh at 11 kW behaves identically to 41 kWh at 5.5 kW. They are two fields carrying one degree of freedom, and that one number, "how long a full charge takes", is now directly measurable from Skoda's state of charge against Zaptec's charging time. Collapsing them is a real option and deliberately not taken: it rewrites the core decision arithmetic, a derived value needs a history that can be empty or unrepresentative, and charge rate tapers near the target, so an average depends on which part of the range the session covered. Getting it wrong is silent — the car simply is not ready at 07:00.
 - `smart_charging_enabled` — the manual override that used to be a Home Assistant toggle
 
 Do not reintroduce the settings-table values as environment variables. Two sources of truth for the departure hour means one of them silently disagreeing with what the UI shows.
