@@ -6,7 +6,9 @@ asserting on view-function return values. A Jinja typo is the most likely way
 this breaks, and it is invisible to any test that stops short of rendering.
 """
 import json
+import re
 from datetime import datetime, timedelta
+from pathlib import Path
 
 import pytest
 
@@ -76,6 +78,7 @@ def client(monkeypatch):
     monkeypatch.setattr(db, "load_runs", lambda conn, since: list(A_NIGHT))
     monkeypatch.setattr(db, "load_prices", lambda conn, zone, since: list(PRICES))
     monkeypatch.setattr(db, "latest_run", lambda conn: A_NIGHT[-1])
+    monkeypatch.setattr(db, "latest_reading", lambda conn: A_NIGHT[-1])
 
     return web.create_app(CONFIG).test_client()
 
@@ -90,17 +93,59 @@ def test_the_overview_reports_what_was_saved(client):
     assert "Saved vs charging on plug-in" in body
 
 
-def test_the_overview_names_the_decision_it_shows_as_an_icon(client):
-    """The icon is all a sighted reader gets; the words must still be there."""
+def test_the_overview_says_the_decision_in_words(client):
+    """An icon alone told a sighted reader too little; the words sit beside it."""
     body = client.get("/").get_data(as_text=True)
 
-    assert ">power_off<" in body
-    assert 'aria-label="Not plugged in"' in body
+    assert "Not plugged in" in body
+
+
+def test_the_overview_falls_back_to_the_last_battery_reading(monkeypatch, client):
+    """
+    Most ticks find nothing on the home charger and never read the car, so the
+    latest run usually has no battery figure. The overview shows the last run
+    that did, and says how old it is.
+    """
+    away = run(9, 0, None, None, day=31, decision="not-at-home")
+    monkeypatch.setattr(db, "latest_run", lambda conn: away)
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert 'class="soc">80%' in body
+    assert "Battery as of" in body
+    assert "Not on the home charger" in body
+
+
+def test_the_overview_says_how_much_charge_is_left_to_add(monkeypatch, client):
+    """34% to an 80% target on an 82 kWh battery is 37.7 kWh."""
+    waiting = run(22, 40, "READY_FOR_CHARGING", 34, decision="waiting-for-cheaper")
+    monkeypatch.setattr(db, "latest_run", lambda conn: waiting)
+    monkeypatch.setattr(db, "latest_reading", lambda conn: waiting)
+
+    body = client.get("/").get_data(as_text=True)
+
+    assert "37.7" in body
+    assert "Battery as of" not in body
 
 
 def test_every_decision_has_an_icon():
     """One without would fall back to a question mark on the overview."""
     assert set(web.DECISION_ICONS) == set(web.DECISIONS)
+    assert set(web.DECISION_ICONS.values()) | {"help"} <= set(web.ICONS)
+
+
+def test_every_icon_a_template_names_is_drawn():
+    """
+    A name missing from ICONS renders an empty box - not even the name, as the
+    icon font used to - so nothing on the page would say an icon had gone.
+    """
+    templates = Path(web.__file__).parent / "templates"
+    names = set()
+    for path in templates.glob("*.html"):
+        names |= set(re.findall(r"icon\('(\w+)'", path.read_text(encoding="utf-8")))
+
+    assert names
+    assert names <= set(web.ICONS), names - set(web.ICONS)
 
 
 def test_the_overview_says_when_energy_is_an_estimate(client):
@@ -179,11 +224,11 @@ def test_the_history_page_renders_sessions_and_runs(client):
     assert "<svg" in body
 
 
-def test_the_history_names_each_decision_it_shows_as_an_icon(client):
+def test_the_history_names_each_decision_in_words(client):
     body = client.get("/history").get_data(as_text=True)
 
-    assert ">hourglass_top<" in body
-    assert 'aria-label="Waiting for a cheaper slot"' in body
+    assert "Charging - cheap slot" in body
+    assert "At target charge" in body
 
 
 def test_repeated_decisions_collapse_into_one_row():
@@ -233,6 +278,7 @@ def test_an_empty_database_still_renders(monkeypatch, client):
     monkeypatch.setattr(db, "load_runs", lambda conn, since: [])
     monkeypatch.setattr(db, "load_prices", lambda conn, zone, since: [])
     monkeypatch.setattr(db, "latest_run", lambda conn: None)
+    monkeypatch.setattr(db, "latest_reading", lambda conn: None)
 
     assert client.get("/").status_code == 200
     assert client.get("/history").status_code == 200

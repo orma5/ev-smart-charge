@@ -1,5 +1,29 @@
-{#- Every icon carries its words as an accessible name and a tooltip, since
-    nothing else on the page says what it means. #}
-{% macro icon(name, label) -%}
-  <span class="ms" role="img" aria-label="{{ label }}" title="{{ label }}">{{ name }}</span>
+{#- An icon from web.ICONS. With a label it is the only thing saying what it
+    means, so it carries the words as an accessible name and a tooltip; without
+    one it sits beside words that already say it, and is hidden from screen
+    readers rather than read out twice. #}
+{% macro icon(name, label=none) -%}
+  <svg class="i" viewBox="0 0 24 24"
+    {%- if label %} role="img" aria-label="{{ label }}"><title>{{ label }}</title>
+    {%- else %} aria-hidden="true">{% endif -%}
+  {{ icons[name] }}</svg>
+{%- endmacro %}
+
+{#- The 7 / 30 / 90 day window, for whichever page it sits on. #}
+{% macro period(endpoint, days) -%}
+  <div class="period">
+    {% for n in (7, 30, 90) %}
+      <a href="{{ url_for(endpoint, days=n) }}" aria-label="{{ n }} days" {% if days == n %}class="on" aria-current="true"{% endif %}>{{ n }}</a>
+    {% endfor %}
+  </div>
+{%- endmacro %}
+
+{#- A session's charge as a small battery bar: what it had, then what it added. #}
+{% macro charge_bar(start, end) -%}
+  {%- if start is not none and end is not none %}
+    <div class="mini" aria-hidden="true">
+      <span class="had" style="width: {{ start }}%"></span>
+      {%- if end > start %}<span class="added" style="left: {{ start }}%; width: {{ end - start }}%"></span>{% endif %}
+    </div>
+  {%- endif %}
 {%- endmacro %}

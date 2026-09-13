@@ -1,81 +1,70 @@
 {% extends "base.html" %}
 {% set page = 'history' %}
-{% from "macros.html" import icon %}
+{% from "macros.html" import icon, period, charge_bar %}
 
 {% block content %}
 
-<div class="md">
+<section>
+  <div class="head">
+    <h1 class="title">Charging sessions</h1>
+    {{ period('history', days) }}
+  </div>
+  <p class="muted">Last {{ days }} days</p>
 
-<div class="md-card-head">
-  <h2>{{ icon('ev_station', 'Charging sessions') }}</h2>
-  {#- A div, not a nav: base.html styles every nav as the tab bar. #}
-  <div class="md-seg">
-    {% for n in (7, 30, 90) %}
-      <a href="{{ url_for('history', days=n) }}" {% if days == n %}class="on"{% endif %}>{{ n }}d</a>
+  <ul class="list" style="margin-top: 14px">
+    {% for session, strip in sessions %}
+      <li class="session">
+        <div class="session-head">
+          <div>
+            <div class="when">{{ session.started_at | when }}</div>
+            <div class="detail">Unplugged {{ session.ended_at | when }}</div>
+          </div>
+          <div class="saved"><strong>{{ session.savings | kr }}</strong><span>saved</span></div>
+        </div>
+        {{ charge_bar(session.start_percent, session.end_percent) }}
+        <div class="detail">
+          {{ session.start_percent | pct }} to {{ session.end_percent | pct }},
+          {{ session.energy_kwh | kwh }} for {{ session.actual_cost | kr }} instead of {{ session.baseline_cost | kr }}
+        </div>
+        {% if strip %}
+          <div title="Price per slot; charged where highlighted">{{ strip }}</div>
+        {% endif %}
+        {% if session.savings is none %}
+          <p class="banner warn">{{ icon('warning') }}<span>Not priced: spot prices are missing for some of the slots involved.</span></p>
+        {% endif %}
+        {% if session.error_count %}
+          <p class="banner">{{ icon('error') }}<span>{{ session.error_count }} run{{ '' if session.error_count == 1 else 's' }} failed during this session.</span></p>
+        {% endif %}
+      </li>
+    {% else %}
+      <li><p class="empty">No sessions in the last {{ days }} days.</p></li>
     {% endfor %}
-  </div>
-</div>
+  </ul>
+</section>
 
-{% for session, strip in sessions %}
-  <section class="md-card">
-    <div class="md-card-head">
-      <div class="md-when">{{ session.started_at | when }}</div>
-      <div class="md-end lg">{{ icon('savings', 'Saved') }}{{ session.savings | kr }}</div>
-    </div>
-    <div class="md-chips start">
-      <span class="md-chip">{{ icon('power_off', 'Unplugged') }}{{ session.ended_at | when }}</span>
-      <span class="md-chip">{{ icon('battery_5_bar', 'Charge') }}{{ session.start_percent | pct }} → {{ session.end_percent | pct }}</span>
-      <span class="md-chip">{{ icon('electric_meter', 'Energy') }}{{ session.energy_kwh | kwh }}</span>
-      <span class="md-chip" title="Spent {{ session.actual_cost | kr }} instead of {{ session.baseline_cost | kr }}">
-        {{ icon('payments', 'Spent') }}{{ session.actual_cost | kr }} <s>{{ session.baseline_cost | kr }}</s>
-      </span>
-    </div>
-    {% if strip %}
-      <div title="Price per slot; charged where highlighted">{{ strip }}</div>
-    {% endif %}
-    {% if session.savings is none %}
-      <p class="md-banner warn">
-        {{ icon('warning', 'Unpriced') }}<span>Not priced: spot prices are missing for some of the slots involved.</span>
-      </p>
-    {% endif %}
-    {% if session.error_count %}
-      <p class="md-banner">
-        {{ icon('error', 'Failed') }}<span>{{ session.error_count }} run{{ '' if session.error_count == 1 else 's' }} failed during this session.</span>
-      </p>
-    {% endif %}
-  </section>
-{% else %}
-  <section class="md-card">
-    <p class="md-empty">No sessions in the last {{ days }} days.</p>
-  </section>
-{% endfor %}
-
-<section class="md-card">
-  <div class="md-card-head">
-    <h2>{{ icon('update', 'Recent runs') }}</h2>
-  </div>
-  <ul class="md-list md-runs">
+<section>
+  <div class="head"><h2 class="title">Recent runs</h2></div>
+  <ul class="runs">
     {% for row in recent %}
       {% if loop.first or row.started_at.date() != loop.previtem.started_at.date() %}
-        <li class="md-day">{{ row.started_at.strftime('%a %d %b') }}</li>
+        <li class="day">{{ row.started_at.strftime('%a %d %b') }}</li>
       {% endif %}
       <li>
         <span class="time">{{ row.started_at.strftime('%H:%M') }}</span>
-        <span class="md-badge {% if row.error %}is-error{% endif %}">
-          {{ icon(row.decision | decision_icon, row.decision | decision) }}
-        </span>
+        <span class="badge {% if row.error %}is-error{% endif %}">{{ icon(row.decision | decision_icon) }}</span>
         <div>
+          <div class="what">{{ row.decision | decision }}</div>
           {% if row.count > 1 or row.charging_state %}
-            <div class="md-meta">
+            <div class="detail">
               {%- if row.count > 1 -%}
                 to {{ row.ended_at.strftime('%H:%M' if row.ended_at.date() == row.started_at.date() else '%a %H:%M') }},
                 {{ row.count }} runs
-                {%- if row.charging_state %} · {% endif -%}
+                {%- if row.charging_state %}, {% endif -%}
               {%- endif -%}
               {{ row.charging_state or '' }}
             </div>
           {% endif %}
-          {% if row.error %}<div class="md-meta is-error">{{ row.error }}</div>{% endif %}
+          {% if row.error %}<div class="detail is-error">{{ row.error }}</div>{% endif %}
         </div>
         <span class="pct">
           {%- if row.start_percent != row.end_percent -%}
@@ -86,11 +75,9 @@
         </span>
       </li>
     {% else %}
-      <li class="md-empty">Nothing recorded yet.</li>
+      <li class="day"><p class="empty">Nothing recorded yet.</p></li>
     {% endfor %}
   </ul>
 </section>
-
-</div>
 
 {% endblock %}

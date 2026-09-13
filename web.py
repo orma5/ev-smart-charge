@@ -45,8 +45,7 @@ DECISIONS = {
     "error": "Failed",
 }
 
-# The overview and history show a decision as an icon alone, with the words
-# above as its tooltip. Material Symbols ligature names.
+# The icon each decision is drawn with, beside its words. Keys into ICONS.
 DECISION_ICONS = {
     "cable-disconnected": "power_off",
     "not-at-home": "wrong_location",
@@ -58,6 +57,34 @@ DECISION_ICONS = {
     "no-prices": "money_off",
     "error": "error",
 }
+
+# Line icons on a 24px grid, stroked in currentColor so they take the colour of
+# the text beside them. Inline SVG rather than an icon font: one drawing style
+# across every screen, and nothing that renders as its own name while a font
+# is still loading.
+ICONS = {name: Markup(svg) for name, svg in {
+    # Decisions
+    "power_off": '<path d="M9 3v4M15 3v4M7 7h10v4a5 5 0 0 1-10 0zM12 16v5"/>',
+    "wrong_location": '<path d="M4 11.5 12 5l8 6.5M6 10v10h12V10M3 3l18 18"/>',
+    "battery_full": '<rect x="2.5" y="7" width="17" height="10" rx="2"/><path d="M22 10.5v3M7 12l2.5 2.5 5-5"/>',
+    "pause_circle": '<circle cx="12" cy="12" r="9"/><path d="M10 9v6M14 9v6"/>',
+    "timer": '<circle cx="12" cy="13.5" r="7.5"/><path d="M12 10v3.5l2.5 1.5M9.5 2.5h5"/>',
+    "bolt": '<path d="M13 2.5 4.5 13.5H11l-1 8 8.5-11H12z"/>',
+    "hourglass_top": '<path d="M6 3h12M6 21h12M8 3v3.5l4 5.5 4-5.5V3M8 21v-3.5l4-5.5 4 5.5V21"/>',
+    "money_off": '<path d="M20.5 12.5l-8 8a1.5 1.5 0 0 1-2.1 0l-6.9-6.9V3.5h10.1l6.9 6.9a1.5 1.5 0 0 1 0 2.1zM3 3l18 18"/>',
+    "error": '<circle cx="12" cy="12" r="9"/><path d="M12 7.5V13M12 16.5v.01"/>',
+    "help": '<circle cx="12" cy="12" r="9"/><path d="M9.5 9.5a2.5 2.5 0 1 1 3.4 2.3c-.6.3-.9.8-.9 1.4v.3M12 16.5v.01"/>',
+    # Everything else
+    "warning": '<path d="M12 3.5 21.5 20h-19zM12 10v4.5M12 17.5v.01"/>',
+    "info": '<circle cx="12" cy="12" r="9"/><path d="M12 11v5.5M12 7.5v.01"/>',
+    "check": '<path d="M5 12.5l4.5 4.5L19 7.5"/>',
+    "home": '<path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/>',
+    "history": '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    # Sliders rather than a cog: at 22px a cog's teeth collapse into a circle
+    # with spikes, which reads as a brightness icon.
+    "tune": '<path d="M4 7h16M4 12h16M4 17h16"/><circle class="knob" cx="9" cy="7" r="2"/>'
+            '<circle class="knob" cx="15" cy="12" r="2"/><circle class="knob" cx="8" cy="17" r="2"/>',
+}.items()}
 
 
 def _kr(value):
@@ -123,6 +150,7 @@ def create_app(config):
         # something, or the one thing the overview is for renders blank.
         decision_icon=lambda value: DECISION_ICONS.get(value, "help"),
     )
+    app.jinja_env.globals["icons"] = ICONS
 
     def period():
         """The requested window, defaulting to a month and clamped to a year."""
@@ -148,12 +176,14 @@ def create_app(config):
         with db.connect(config) as conn:
             sessions = _sessions(conn, config, since)
             latest = db.latest_run(conn)
+            reading = db.latest_reading(conn)
             settings = db.load_settings(conn)
 
         return render_template(
             "overview.html",
             days=days,
             latest=latest,
+            reading=reading,
             settings=settings,
             totals=_totals(sessions),
             chart=daily_savings_chart(sessions),

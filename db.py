@@ -176,6 +176,21 @@ def latest_run(conn):
         return _run(cur.fetchone())
 
 
+def latest_reading(conn):
+    """
+    The most recent tick that read the car, or None if none ever has.
+
+    Not the same as latest_run, and usually not the same row: a tick that finds
+    nothing on the home charger returns before spending a Skoda request, so
+    most runs carry no battery figure at all.
+    """
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT * FROM runs WHERE battery_percent IS NOT NULL ORDER BY at DESC LIMIT 1"
+        )
+        return _run(cur.fetchone())
+
+
 def _run(row):
     """
     A run row with its numeric as a float, for the same reason load_settings

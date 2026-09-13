@@ -1,5 +1,6 @@
 <!doctype html>
 <html lang="en">
+{% from "macros.html" import icon %}
 <head>
 <meta charset="utf-8">
 <!-- viewport-fit=cover lets the page paint under the iPhone home indicator, and
@@ -9,8 +10,7 @@
 <title>{% block title %}EV Smart Charge{% endblock %}</title>
 
 <!-- Added to the home screen this launches without browser chrome, which is the
-     whole of what "app feel" turned out to need: the layout was already
-     responsive and dark-mode aware. -->
+     whole of what "app feel" turned out to need. -->
 <link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
 <link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
 <link rel="icon" href="{{ url_for('static', filename='icon-192.png') }}">
@@ -18,357 +18,287 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="EV Charge">
-<!-- Two, so the status bar follows the page into dark mode rather than staying
-     the light accent against a dark screen. -->
-<meta name="theme-color" content="#2f6f4f" media="(prefers-color-scheme: light)">
-<meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)">
-<!-- Only the glyphs the pages use, which Google Fonts requires in alphabetical
-     order. An icon missing from the list renders as its name in plain text. -->
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Material+Symbols+Rounded:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200&icon_names=battery_5_bar,battery_full,bolt,chevron_right,electric_car,electric_meter,error,ev_station,flag,help,history,hourglass_top,info,money_off,pause_circle,payments,power_off,savings,timer,update,warning,wrong_location&display=block">
+<!-- Two, so the status bar follows the page into dark mode. -->
+<meta name="theme-color" content="#eef2f0" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#0e1714" media="(prefers-color-scheme: dark)">
+<!-- Schibsted Grotesk carries the figures, which are most of what these screens
+     are. If it fails to load the fallbacks have close enough metrics that
+     nothing reflows badly. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Schibsted+Grotesk:wght@400;500;600;700;800&display=swap">
 <style>
   /* Tokens are defined on :root and only redefined for dark, so no colour has
-     its single definition inside a media query. */
+     its single definition inside a media query. Dark is its own palette - a
+     spruce night rather than the light one inverted. */
   :root {
-    --bg: #f7f7f5;
-    --panel: #ffffff;
-    --ink: #1c1c1a;
-    --muted: #6b6b66;
-    --line: #e2e2dd;
+    --bg: #eef2f0;
+    --surface: #fbfcfb;
+    --ink: #10302a;
+    --muted: #5d6f69;
+    --rule: #c6d3cd;
+    --track: #d6e0db;
     --accent: #2f6f4f;
-    --accent-soft: #cfe3d7;
-    --warn: #9a4a2f;
+    --stripe: #c4e0d0;
+    --thumb: #ffffff;
+    --error: #a3261d;
+    --error-bg: #f6dcd8;
+    --warn: #6e4a00;
+    --warn-bg: #f3e4bf;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --bg: #16171a;
-      --panel: #1e2024;
-      --ink: #e8e8e4;
-      --muted: #9a9a94;
-      --line: #2e3136;
-      --accent: #6cc08c;
-      --accent-soft: #2c4436;
-      --warn: #e0906f;
-    }
-  }
-
-  /* Material 3 tokens, a green scheme seeded from the old accent. Overview and
-     history are built on these; settings still uses the tokens above. */
-  :root {
-    --md-primary: #2d6a4f;
-    --md-primary-container: #b1f1ce;
-    --md-on-primary-container: #002113;
-    --md-secondary-container: #d0e8d8;
-    --md-on-secondary-container: #0b1f15;
-    --md-surface: #f6fbf5;
-    --md-surface-container-low: #edf3ec;
-    --md-on-surface: #171d19;
-    --md-on-surface-variant: #404943;
-    --md-outline: #707971;
-    --md-outline-variant: #c0c9c1;
-    --md-error: #ba1a1a;
-    --md-error-container: #ffdad6;
-    --md-on-error-container: #410002;
-    --md-warn-container: #ffdea5;
-    --md-on-warn-container: #261900;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      --md-primary: #95d5b3;
-      --md-primary-container: #0f5238;
-      --md-on-primary-container: #b1f1ce;
-      --md-secondary-container: #354b3f;
-      --md-on-secondary-container: #d0e8d8;
-      --md-surface: #0f1511;
-      --md-surface-container-low: #1b211d;
-      --md-on-surface: #dfe4dd;
-      --md-on-surface-variant: #c0c9c1;
-      --md-outline: #8a938b;
-      --md-outline-variant: #404943;
-      --md-error: #ffb4ab;
-      --md-error-container: #93000a;
-      --md-on-error-container: #ffdad6;
-      --md-warn-container: #5e4200;
-      --md-on-warn-container: #ffdea5;
+      --bg: #0e1714;
+      --surface: #15211d;
+      --ink: #e3ebe7;
+      --muted: #93a59e;
+      --rule: #2a3934;
+      --track: #22302b;
+      --accent: #74c69b;
+      --stripe: #24402f;
+      --thumb: #e3ebe7;
+      --error: #f2b8b0;
+      --error-bg: #4a1d18;
+      --warn: #eac46e;
+      --warn-bg: #3d3113;
     }
   }
 
   * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
   body {
     margin: 0;
-    background: var(--md-surface);
-    color: var(--md-on-surface);
-    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    font: 16px/1.45 "Schibsted Grotesk", "Helvetica Neue", Arial, sans-serif;
   }
-  a { color: var(--accent); }
-
-  header {
-    display: flex; flex-wrap: wrap; gap: 1rem 2rem; align-items: baseline;
-    padding: 1rem 1.5rem;
-    border-bottom: 1px solid var(--line);
-    background: var(--panel);
-  }
-  header h1 { font-size: 1rem; margin: 0; letter-spacing: .02em; }
-  header h1 a { color: var(--ink); text-decoration: none; }
-  nav { display: flex; gap: 1.25rem; }
-  nav a { text-decoration: none; color: var(--muted); }
-  nav a:hover, nav a.on { color: var(--ink); }
-  /* Desktop reads the labels; the icons are for the bottom bar below. */
-  nav svg { display: none; }
-
-  main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
-  h2 { font-size: 1rem; margin: 2rem 0 .75rem; }
-  h2:first-child { margin-top: 0; }
-
-  .panel {
-    background: var(--panel);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1rem;
+  /* No tabular-nums anywhere: in this face they widen the full stop and colon
+     too, so "213.25 kr" reads as "213 . 25 kr". Amounts are right-aligned,
+     which lines them up well enough without. */
+  a { color: var(--accent); font-weight: 600; }
+  a:focus-visible, button:focus-visible, summary:focus-visible {
+    outline: 2px solid var(--accent); outline-offset: 2px;
   }
 
-  .note { color: var(--muted); font-size: .82rem; margin: .5rem 0 0; }
+  /* The status bar is translucent in standalone mode, so the top inset is the
+     page's to pad. The bottom leaves room for the fixed tab bar. */
+  main {
+    display: grid; gap: 36px;
+    max-width: 560px; margin: 0 auto;
+    padding: max(20px, env(safe-area-inset-top)) 20px calc(100px + env(safe-area-inset-bottom));
+  }
+  section { min-width: 0; }
 
-  /* --- Material 3 --------------------------------------------------------- */
-
-  .ms {
-    font-family: "Material Symbols Rounded";
-    font-weight: normal; font-style: normal; font-size: 20px; line-height: 1;
-    letter-spacing: normal; text-transform: none; white-space: nowrap; direction: ltr;
-    font-feature-settings: "liga"; -webkit-font-smoothing: antialiased;
-    font-variation-settings: "FILL" 0, "wght" 400, "GRAD" 0, "opsz" 20;
-    vertical-align: middle;
+  .i {
+    width: 22px; height: 22px; flex-shrink: 0;
+    fill: none; stroke: currentColor; stroke-width: 1.9;
+    stroke-linecap: round; stroke-linejoin: round;
   }
 
-  .md { display: grid; gap: 12px; }
-  .md-card { background: var(--md-surface-container-low); border-radius: 16px; padding: 16px; }
-  .md-card-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 8px; }
-  .md h2 { margin: 0; display: flex; color: var(--md-on-surface-variant); }
-  .md h2 .ms { font-size: 24px; }
+  .head { display: flex; justify-content: space-between; align-items: center; gap: 12px; min-height: 44px; }
+  .head > a { display: inline-flex; align-items: center; min-height: 44px; text-decoration: none; }
+  .title { margin: 0; font-size: 22px; line-height: 1.2; font-weight: 700; letter-spacing: -0.01em; }
+  .brand { font-size: 17px; font-weight: 700; letter-spacing: -0.01em; }
+  .muted { margin: 0; color: var(--muted); font-size: 14px; }
+  .detail { color: var(--muted); font-size: 13px; }
+  .empty { margin: 0; color: var(--muted); font-size: 15px; }
 
-  /* The decision, as one large icon. */
-  .md-hero {
-    display: grid; place-items: center; width: 96px; height: 96px; margin: 0 auto 16px;
-    border-radius: 28px;
-    background: var(--md-primary-container); color: var(--md-on-primary-container);
+  .pill {
+    display: inline-flex; align-items: center; gap: 8px; height: 32px; padding: 0 12px;
+    border: 1px solid var(--rule); border-radius: 999px;
+    font-size: 13px; font-weight: 500; white-space: nowrap;
   }
-  .md-hero .ms { font-size: 56px; font-variation-settings: "FILL" 1, "wght" 400, "GRAD" 0, "opsz" 48; }
-  .md-hero.is-error { background: var(--md-error-container); color: var(--md-on-error-container); }
+  .pill .dot { width: 8px; height: 8px; border-radius: 4px; background: var(--accent); }
+  .pill .i { width: 16px; height: 16px; }
+  .pill.warn { background: var(--warn-bg); color: var(--warn); border-color: transparent; }
 
-  .md-chips { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; }
-  .md-chips.start { justify-content: flex-start; }
-  .md-chip {
-    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 12px 0 8px;
-    border: 1px solid var(--md-outline-variant); border-radius: 8px;
-    color: var(--md-on-surface-variant); font-size: .875rem; font-weight: 500;
-    font-variant-numeric: tabular-nums; white-space: nowrap;
+  .banner, .notice {
+    display: flex; align-items: flex-start; gap: 10px;
+    margin: 14px 0 0; padding: 12px 14px; border-radius: 10px; font-size: 14px;
   }
-  .md-chip .ms { font-size: 18px; }
-  .md-chip s { font-weight: 400; opacity: .7; }
-  .md-chip.warn { background: var(--md-warn-container); color: var(--md-on-warn-container); border-color: transparent; padding: 0 8px; }
+  .banner { background: var(--error-bg); color: var(--error); }
+  .banner.warn { background: var(--warn-bg); color: var(--warn); }
+  .notice { margin: 8px 0 0; background: var(--surface); border: 1px solid var(--rule); }
+  .banner .i, .notice .i { width: 18px; height: 18px; margin-top: 1px; }
 
-  .md-banner {
-    display: flex; align-items: flex-start; gap: 8px; margin-top: 12px; padding: 12px;
-    border-radius: 12px; font-size: .875rem;
-    background: var(--md-error-container); color: var(--md-on-error-container);
-  }
-  .md-banner.warn { background: var(--md-warn-container); color: var(--md-on-warn-container); }
-  .md-empty { margin: 0; color: var(--md-on-surface-variant); font-size: .875rem; }
-
-  .md-seg { display: flex; border: 1px solid var(--md-outline); border-radius: 999px; overflow: hidden; }
-  .md-seg a {
-    display: grid; place-items: center; min-width: 48px; height: 40px; padding: 0 12px;
-    color: var(--md-on-surface); text-decoration: none; font-size: .875rem; font-weight: 500;
+  /* 7 / 30 / 90, as underlined tabs. Each is a full 44px target. */
+  .period { display: flex; gap: 2px; }
+  .period a {
+    display: grid; place-items: center; min-width: 44px; height: 44px;
+    color: var(--muted); font-size: 15px; font-weight: 600; text-decoration: none;
     -webkit-tap-highlight-color: transparent;
   }
-  .md-seg a + a { border-left: 1px solid var(--md-outline); }
-  .md-seg a.on { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
+  .period a.on { color: var(--ink); box-shadow: inset 0 -3px 0 var(--ink); }
 
-  .md-display {
-    margin: 0 0 12px; font-size: 2.75rem; line-height: 1.15;
-    color: var(--md-primary); font-variant-numeric: tabular-nums;
+  /* --- The battery ------------------------------------------------------- */
+
+  .soc-row { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; }
+  .soc { font-size: 108px; line-height: .82; font-weight: 800; letter-spacing: -0.05em; }
+  .target { display: flex; flex-direction: column; align-items: flex-end; padding-bottom: 4px; }
+  .target span { color: var(--muted); font-size: 13px; }
+  .target strong { font-size: 28px; line-height: 1; font-weight: 700; }
+
+  .battery { display: flex; align-items: center; gap: 3px; margin-top: 14px; }
+  .battery .cell { position: relative; flex-grow: 1; height: 60px; border: 3px solid var(--ink); border-radius: 14px; }
+  .battery .inner { position: absolute; inset: 5px; }
+  .battery .nub { width: 7px; height: 22px; border-radius: 0 4px 4px 0; background: var(--ink); }
+  .level, .to-go { position: absolute; top: 0; bottom: 0; border-radius: 7px; }
+  .level { left: 0; background: var(--ink); }
+  /* What tonight's charge still has to add. */
+  .to-go { margin-left: 3px; background: repeating-linear-gradient(135deg, var(--accent) 0 3px, var(--stripe) 3px 9px); }
+
+  .status { display: flex; align-items: flex-start; gap: 10px; margin-top: 14px; }
+  .status .i { margin-top: 2px; }
+  .status strong { display: block; font-size: 18px; line-height: 1.3; font-weight: 600; }
+  .status.is-error { color: var(--error); }
+
+  /* --- Savings, as a receipt --------------------------------------------- */
+
+  .ledger { margin: 14px 0 0; }
+  .ledger div {
+    display: flex; justify-content: space-between; align-items: baseline; gap: 12px;
+    padding: 10px 0; border-top: 1px solid var(--rule);
   }
+  .ledger dd { margin: 0; white-space: nowrap; }
+  .ledger .baseline { color: var(--muted); }
+  .ledger .total { padding: 12px 0 0; border-top: 3px double var(--ink); }
+  .ledger .total dt { font-size: 18px; font-weight: 700; }
+  .ledger .total dd { font-size: 38px; line-height: 1; font-weight: 800; letter-spacing: -0.02em; color: var(--accent); }
 
-  .chart svg { display: block; width: 100%; height: 120px; margin-top: 1rem; }
-  .chart .bar { fill: var(--md-primary); }
-  .chart .axis { stroke: var(--md-outline-variant); }
-  .chart .ticks { display: flex; justify-content: space-between; color: var(--md-on-surface-variant); font-size: .75rem; }
+  .chart { margin-top: 16px; }
+  .chart svg { display: block; width: 100%; height: 72px; }
+  .chart .bar { fill: var(--accent); }
+  .chart .axis { stroke: var(--ink); }
+  .chart .ticks { display: flex; justify-content: space-between; margin-top: 4px; color: var(--muted); font-size: 12px; }
 
-  .strip { display: block; width: 100%; height: 44px; margin-top: 12px; }
-  .strip .slot { fill: var(--md-outline-variant); }
-  .strip .slot.charged { fill: var(--md-primary); }
-
-  .md-about summary {
-    display: grid; place-items: center; width: 40px; height: 40px; margin: 4px -8px 0 auto;
-    border-radius: 50%; list-style: none; cursor: pointer; color: var(--md-on-surface-variant);
+  .about { margin-top: 8px; }
+  .about summary {
+    display: inline-flex; align-items: center; gap: 6px; min-height: 44px;
+    color: var(--accent); font-size: 15px; font-weight: 600; cursor: pointer; list-style: none;
   }
-  .md-about summary::-webkit-details-marker { display: none; }
-  .md-about[open] summary { background: var(--md-secondary-container); color: var(--md-on-secondary-container); }
-  .md-about p { margin: 4px 0 0; color: var(--md-on-surface-variant); font-size: .875rem; }
+  .about summary::-webkit-details-marker { display: none; }
+  .about summary .i { width: 18px; height: 18px; }
+  .about p { margin: 0 0 10px; max-width: 65ch; color: var(--muted); font-size: 14px; }
 
-  .md-icon-btn {
-    display: grid; place-items: center; width: 40px; height: 40px; margin-right: -8px;
-    border-radius: 50%; color: var(--md-primary); text-decoration: none;
-  }
-  .md-icon-btn .ms { font-size: 24px; }
+  /* --- Sessions ---------------------------------------------------------- */
 
-  /* Lists rather than tables: on a phone the tables wrapped every date onto
-     three lines and still scrolled sideways. */
-  .md-list { list-style: none; margin: 0; padding: 0; }
-  .md-list li {
-    display: flex; justify-content: space-between; align-items: center; gap: 12px;
-    padding: 12px 0; border-top: 1px solid var(--md-outline-variant);
+  .list { list-style: none; margin: 0; padding: 0; }
+  .list > li {
+    display: flex; justify-content: space-between; align-items: center; gap: 16px;
+    padding: 14px 0; border-top: 1px solid var(--rule);
   }
-  .md-list li:first-child { border-top: 0; padding-top: 4px; }
-  .md-when { font-weight: 500; }
-  .md-meta {
-    display: flex; flex-wrap: wrap; gap: 2px 12px; margin-top: 2px;
-    color: var(--md-on-surface-variant); font-size: .8125rem; font-variant-numeric: tabular-nums;
-  }
-  .md-meta span, .md-end { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
-  .md-meta .ms { font-size: 16px; }
-  .md-meta.is-error { color: var(--md-error); }
-  .md-end { color: var(--md-primary); font-weight: 500; font-variant-numeric: tabular-nums; }
-  .md-end .ms { font-size: 18px; }
-  .md-end.lg { font-size: 1.375rem; }
-  .md-end.lg .ms { font-size: 24px; }
+  .list > li.session { display: block; }
+  .session-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; }
+  .when { font-size: 15px; font-weight: 600; }
+  .saved { display: flex; flex-direction: column; align-items: flex-end; white-space: nowrap; }
+  .saved strong { font-size: 18px; font-weight: 700; }
+  .saved span { color: var(--muted); font-size: 12px; }
+
+  .mini { position: relative; width: 140px; height: 8px; margin: 6px 0; border-radius: 4px; background: var(--track); overflow: hidden; }
+  .mini span { position: absolute; top: 0; bottom: 0; }
+  .mini .had { left: 0; background: var(--ink); }
+  .mini .added { background: var(--accent); opacity: .6; }
+
+  .strip { display: block; width: 100%; height: 44px; margin-top: 10px; }
+  .strip .slot { fill: var(--rule); }
+  .strip .slot.charged { fill: var(--accent); }
 
   /* The runs log: time, what it decided, battery. A heading per day, so the
      date is not repeated on every row. */
-  .md-runs li { display: grid; grid-template-columns: 3rem 36px 1fr auto; }
-  .md-runs .time, .md-runs .pct { font-variant-numeric: tabular-nums; white-space: nowrap; }
-  .md-runs .time { color: var(--md-on-surface-variant); }
-  .md-runs .md-day {
-    display: block; padding: 16px 0 4px; border-top: 0;
-    color: var(--md-on-surface-variant); font-size: .75rem; font-weight: 500;
-    text-transform: uppercase; letter-spacing: .04em;
+  .runs { list-style: none; margin: 0; padding: 0; }
+  .runs li {
+    display: grid; grid-template-columns: 3rem 36px 1fr auto; align-items: center; gap: 12px;
+    padding: 10px 0; border-top: 1px solid var(--rule);
   }
-  .md-runs .md-day + li { border-top: 0; }
-  .md-badge {
-    display: grid; place-items: center; width: 36px; height: 36px; border-radius: 12px;
-    background: var(--md-secondary-container); color: var(--md-on-secondary-container);
+  .runs li.day { display: block; padding: 20px 0 6px; border-top: 0; font-size: 14px; font-weight: 700; }
+  .runs li.day + li { border-top: 0; }
+  .runs .time { color: var(--muted); }
+  .runs .what { font-size: 15px; font-weight: 600; }
+  .runs .detail.is-error { color: var(--error); }
+  .runs .pct { white-space: nowrap; }
+  .badge {
+    display: grid; place-items: center; width: 36px; height: 36px; border-radius: 10px;
+    background: var(--surface); border: 1px solid var(--rule);
   }
-  .md-badge.is-error { background: var(--md-error-container); color: var(--md-on-error-container); }
+  .badge .i { width: 20px; height: 20px; }
+  .badge.is-error { background: var(--error-bg); color: var(--error); border-color: transparent; }
+
+  /* --- Settings ---------------------------------------------------------- */
 
   /* A settings row: name on the left, value on the right, one line of hint
      under both. Every value here is short - 7, 11.0, 82, 80 - so they read
-     better right-aligned against the edge than adrift in a 12rem box, and the
-     rows line up into something scannable instead of a stack of paragraphs. */
+     better right-aligned against the edge than adrift in a wide box. */
   .field {
-    display: grid; grid-template-columns: 1fr auto; align-items: center;
-    gap: .2rem 1rem; padding: .8rem 0;
-    border-bottom: 1px solid var(--line);
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 16px;
+    padding: 14px 0; border-bottom: 1px solid var(--rule);
   }
-  .field:last-of-type { border-bottom: 0; }
-  .field .label { font-size: .95rem; }
-  .field .hint { grid-column: 1 / -1; color: var(--muted); font-size: .8rem; }
-  .field .error { grid-column: 1 / -1; color: var(--warn); font-size: .8rem; }
+  .field .label { font-weight: 600; }
+  .field .hint { grid-column: 1 / -1; color: var(--muted); font-size: 13px; }
+  .field .error { grid-column: 1 / -1; color: var(--error); font-size: 13px; font-weight: 500; }
 
-  form input[type=number], form input[type=text] {
-    width: 7rem; padding: .45rem .6rem; font: inherit; text-align: right;
-    background: var(--bg); color: var(--ink);
-    border: 1px solid var(--line); border-radius: 6px;
+  input[type=number] {
+    /* 16px is a hard floor: below it iOS Safari zooms the whole page in when
+       the field takes focus, and does not zoom back out afterwards. */
+    width: 6.5rem; height: 44px; padding: 0 12px;
+    font: inherit; font-size: 16px; font-weight: 600; text-align: right;
+    background: var(--surface); color: var(--ink);
+    border: 1px solid var(--rule); border-radius: 10px;
   }
+  input[type=number]:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; border-color: var(--accent); }
 
   /* A real switch rather than a checkbox. This is the one control here with
      an immediate consequence - off means the car charges the moment it is
      plugged in - so it should look like something you flipped. */
-  .switch { position: relative; display: inline-block; width: 46px; height: 28px; }
-  .switch input { position: absolute; opacity: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+  .switch { position: relative; display: inline-block; width: 52px; height: 32px; }
+  .switch input { position: absolute; inset: 0; width: 100%; height: 100%; margin: 0; opacity: 0; cursor: pointer; }
   .switch .track {
     position: absolute; inset: 0; border-radius: 999px;
-    background: var(--line); transition: background .15s; pointer-events: none;
+    background: var(--track); transition: background .15s; pointer-events: none;
   }
   .switch .track::after {
-    content: ""; position: absolute; top: 3px; left: 3px; width: 22px; height: 22px;
-    border-radius: 50%; background: var(--panel); transition: transform .15s;
+    content: ""; position: absolute; top: 4px; left: 4px; width: 24px; height: 24px;
+    border-radius: 50%; background: var(--thumb); box-shadow: 0 1px 2px rgba(16, 48, 42, .3);
+    transition: transform .15s;
   }
   .switch input:checked ~ .track { background: var(--accent); }
-  .switch input:checked ~ .track::after { transform: translateX(18px); }
+  .switch input:checked ~ .track::after { transform: translateX(20px); }
   .switch input:focus-visible ~ .track { outline: 2px solid var(--accent); outline-offset: 2px; }
 
-  /* The long explanations that used to sit under every field. Kept, because
-     "usually has no effect" is worth knowing, but folded away: on a phone they
-     were four fifths of the page and you scrolled past them every time. */
-  details.about { margin-top: 1.25rem; }
-  details.about summary { cursor: pointer; color: var(--muted); font-size: .85rem; padding: .4rem 0; }
-  details.about p { color: var(--muted); font-size: .85rem; margin: .5rem 0; }
-  button {
-    font: inherit; padding: .45rem 1.1rem; border-radius: 5px;
-    border: 1px solid var(--accent); background: var(--accent); color: var(--panel);
-    cursor: pointer;
+  /* Full width, because a Save the width of the word "Save" is a small target
+     at the bottom of a form you just finished thumbing through. */
+  button.primary {
+    width: 100%; height: 52px; margin-top: 20px;
+    font: inherit; font-size: 16px; font-weight: 700;
+    color: var(--bg); background: var(--ink); border: 0; border-radius: 12px; cursor: pointer;
   }
 
-  /* --- Phone -------------------------------------------------------------
-     The layout was already responsive; what it was not was reachable. Links
-     in a top bar are the furthest point from a thumb on a 6" screen, and the
-     desktop spacing wastes a third of the viewport before the first number.
-     Below this width the nav moves to the bottom as tabs and the padding
-     tightens. 560px rather than a device size. */
-  @media (max-width: 560px) {
-    header { padding: .85rem 1rem; }
-    main { padding: 1rem; padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
-    h2 { margin: 1.5rem 0 .6rem; }
-    .panel { padding: .9rem 1rem; border-radius: 10px; }
-    .md-display { font-size: 2.25rem; }
+  /* --- Tab bar ------------------------------------------------------------
+     At the bottom, where a thumb reaches on a 6" screen. */
+  nav.tabs {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+    display: grid; grid-template-columns: repeat(3, minmax(0, 1fr));
+    background: var(--surface); border-top: 1px solid var(--rule);
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  nav.tabs a {
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 3px;
+    min-height: 64px; color: var(--muted); font-size: 12px; font-weight: 500; text-decoration: none;
+    /* Stops the grey flash on tap reading as a broken link. */
+    -webkit-tap-highlight-color: transparent;
+  }
+  nav.tabs a.on { color: var(--ink); font-weight: 700; box-shadow: inset 0 3px 0 var(--ink); }
+  /* The sliders' knobs cover the lines they sit on. */
+  nav.tabs .knob { fill: var(--surface); }
 
-    nav {
-      position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
-      gap: 0;
-      background: var(--panel);
-      border-top: 1px solid var(--line);
-      padding-bottom: env(safe-area-inset-bottom);
-    }
-    nav a {
-      flex: 1;
-      display: flex; flex-direction: column; align-items: center; justify-content: center;
-      gap: .15rem;
-      /* 56px, comfortably past the 44px minimum touch target. */
-      min-height: 56px;
-      font-size: .7rem;
-      /* Stops the grey flash on tap reading as a broken link. */
-      -webkit-tap-highlight-color: transparent;
-    }
-    nav a.on { color: var(--accent); }
-    nav svg { display: block; width: 22px; height: 22px; fill: none;
-              stroke: currentColor; stroke-width: 1.8;
-              stroke-linecap: round; stroke-linejoin: round; }
-
-    form input[type=number], form input[type=text] {
-      /* 16px is a hard floor: below it iOS Safari zooms the whole page in when
-         the field takes focus, and does not zoom back out afterwards. */
-      font-size: 16px;
-      width: 6.5rem;
-      padding: .55rem .6rem;
-    }
-    .field { padding: .9rem 0; }
-    /* Full width, because a Save the width of the word "Save" is a small
-       target at the bottom of a form you just finished thumbing through. */
-    button[type=submit] { width: 100%; padding: .8rem; font-size: 1rem; margin-top: .5rem; }
+  @media (prefers-reduced-motion: reduce) {
+    .switch .track, .switch .track::after { transition: none; }
   }
 </style>
 </head>
 <body>
-<header>
-  <h1><a href="{{ url_for('overview') }}">EV Smart Charge</a></h1>
-  <!-- Hidden entirely above the phone breakpoint, where the labels do the work. -->
-  <nav>
-    <a href="{{ url_for('overview') }}" {% if page == 'overview' %}class="on"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
-      Overview
-    </a>
-    <a href="{{ url_for('history') }}" {% if page == 'history' %}class="on"{% endif %}>
-      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
-      History
-    </a>
-    <a href="{{ url_for('settings_page') }}" {% if page == 'settings' %}class="on"{% endif %}>
-      <!-- Sliders rather than a cog: at 22px a cog's teeth collapse into a
-           circle with spikes, which reads as a brightness icon. -->
-      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg>
-      Settings
-    </a>
-  </nav>
-</header>
 <main>{% block content %}{% endblock %}</main>
+<nav class="tabs">
+  <a href="{{ url_for('overview') }}" {% if page == 'overview' %}class="on" aria-current="page"{% endif %}>{{ icon('home') }}Overview</a>
+  <a href="{{ url_for('history') }}" {% if page == 'history' %}class="on" aria-current="page"{% endif %}>{{ icon('history') }}History</a>
+  <a href="{{ url_for('settings_page') }}" {% if page == 'settings' %}class="on" aria-current="page"{% endif %}>{{ icon('tune') }}Settings</a>
+</nav>
 </body>
 </html>

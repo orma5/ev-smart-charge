@@ -1,68 +1,88 @@
 {% extends "base.html" %}
 {% set page = 'overview' %}
-{% from "macros.html" import icon %}
+{% from "macros.html" import icon, period, charge_bar %}
 
 {% block content %}
 
-<div class="md">
+<div class="head">
+  <span class="brand">EV Smart Charge</span>
+  {% if settings.smart_charging_enabled %}
+    <span class="pill"><span class="dot"></span>Smart charging on</span>
+  {% else %}
+    <span class="pill warn">{{ icon('warning') }}Smart charging off</span>
+  {% endif %}
+</div>
 
-<section class="md-card">
-  <div class="md-card-head">
-    <h2>{{ icon('electric_car', 'Right now') }}</h2>
-    {% if not settings.smart_charging_enabled %}
-      <span class="md-chip warn">{{ icon('warning', 'Smart charging is off, so the car charges whenever it likes.') }}</span>
-    {% endif %}
-  </div>
+<section>
+  {#- The battery comes from the last run that read the car, not the last run:
+      a tick that finds nothing on the home charger never asks the car. #}
+  {% if reading %}
+    {% set battery = reading.battery_percent %}
+    {% set target = reading.target_percent or settings.charge_limit_percent %}
+    <div class="soc-row">
+      <span class="soc">{{ battery }}%</span>
+      <div class="target"><span>Target</span><strong>{{ target }}%</strong></div>
+    </div>
+    <div class="battery" role="img" aria-label="Battery at {{ battery }}%, target {{ target }}%">
+      <div class="cell">
+        <div class="inner">
+          <span class="level" style="width: {{ [battery, 100] | min }}%"></span>
+          {% if battery < target %}
+            <span class="to-go" style="left: {{ battery }}%; width: calc({{ target - battery }}% - 3px)"></span>
+          {% endif %}
+        </div>
+      </div>
+      <div class="nub"></div>
+    </div>
+  {% endif %}
 
   {% if latest %}
-    <div class="md-hero {% if latest.error %}is-error{% endif %}">
-      {{ icon(latest.decision | decision_icon, latest.decision | decision) }}
-    </div>
-    <div class="md-chips">
-      <span class="md-chip">{{ icon('battery_5_bar', 'Battery') }}{{ latest.battery_percent | pct }}</span>
-      {% if latest.target_percent %}
-        <span class="md-chip">{{ icon('flag', 'Target') }}{{ latest.target_percent }}%</span>
-      {% endif %}
-      <span class="md-chip">{{ icon('update', 'Last checked') }}{{ latest.at | ago }}</span>
+    <div class="status {% if latest.error %}is-error{% endif %}">
+      {{ icon(latest.decision | decision_icon) }}
+      <div>
+        <strong>{{ latest.decision | decision }}</strong>
+        <span class="muted">
+          {%- if reading and reading.at != latest.at %}Battery as of {{ reading.at | when }}. {% endif -%}
+          {%- if reading and reading.at == latest.at and battery < target -%}
+            {{ ((target - battery) * settings.battery_capacity_kwh / 100) | kwh }} to go.
+          {% endif -%}
+          Checked {{ latest.at | ago }}.
+        </span>
+      </div>
     </div>
     {% if latest.error %}
-      <p class="md-banner">{{ icon('error', 'Failed') }}<span>{{ latest.error }}</span></p>
+      <p class="banner">{{ icon('error') }}<span>{{ latest.error }}</span></p>
     {% endif %}
   {% else %}
-    <p class="md-empty">No runs recorded yet. The scheduler writes one every four minutes.</p>
+    <p class="empty">No runs recorded yet. The scheduler writes one every four minutes.</p>
   {% endif %}
 </section>
 
-<section class="md-card">
-  <div class="md-card-head">
-    <h2>{{ icon('savings', 'Saved vs charging on plug-in') }}</h2>
-    {#- A div, not a nav: base.html styles every nav as the tab bar. #}
-    <div class="md-seg">
-      {% for n in (7, 30, 90) %}
-        <a href="{{ url_for('overview', days=n) }}" {% if days == n %}class="on"{% endif %}>{{ n }}d</a>
-      {% endfor %}
-    </div>
+<section>
+  <div class="head">
+    <h2 class="title">Last {{ days }} days</h2>
+    {{ period('overview', days) }}
   </div>
 
-  <p class="md-display">{{ totals.savings | kr }}</p>
-
-  <div class="md-chips start">
-    <span class="md-chip" title="Spent {{ totals.actual_cost | kr }} instead of {{ totals.baseline_cost | kr }}">
-      {{ icon('payments', 'Spent') }}{{ totals.actual_cost | kr }} <s>{{ totals.baseline_cost | kr }}</s>
-    </span>
-    <span class="md-chip">{{ icon('electric_meter', 'Energy') }}{{ totals.energy_kwh | kwh }}</span>
-    <span class="md-chip">{{ icon('ev_station', 'Sessions') }}{{ totals.sessions }}</span>
-  </div>
+  {#- A receipt: what charging on plug-in would have cost, less what it did. #}
+  <dl class="ledger" aria-label="Saved vs charging on plug-in">
+    <div class="baseline"><dt>Charging on plug-in</dt><dd>{{ totals.baseline_cost | kr }}</dd></div>
+    <div><dt>Smart charging</dt><dd>−{{ totals.actual_cost | kr }}</dd></div>
+    <div class="total"><dt>Saved</dt><dd>{{ totals.savings | kr }}</dd></div>
+  </dl>
+  <p class="muted" style="margin-top: 10px">
+    {{ totals.energy_kwh | kwh }} across {{ totals.sessions }} session{{ '' if totals.sessions == 1 else 's' }}
+  </p>
 
   {% if chart %}
     {{ chart }}
   {% else %}
-    <p class="md-empty" style="margin-top: 12px">Nothing to chart yet — no completed charging sessions in this window.</p>
+    <p class="empty" style="margin-top: 14px">Nothing to chart yet: no completed charging sessions in this window.</p>
   {% endif %}
 
   {% if totals.unpriced %}
-    <p class="md-banner warn">
-      {{ icon('warning', 'Unpriced') }}
+    <p class="banner warn">
+      {{ icon('warning') }}
       <span>
         {{ totals.unpriced }} session{{ ' is' if totals.unpriced == 1 else 's are' }} left out of
         these totals: spot prices are missing for some of the slots involved.
@@ -70,8 +90,8 @@
     </p>
   {% endif %}
 
-  <details class="md-about">
-    <summary>{{ icon('info', 'How this is calculated') }}</summary>
+  <details class="about">
+    <summary>{{ icon('info') }}How this is calculated</summary>
     <p>
       The comparison is against charging flat out from the moment the cable went in until
       the car reached its target. Energy comes from the charger's own meter where it
@@ -85,36 +105,33 @@
 </section>
 
 {% if sessions %}
-  <section class="md-card">
-    <div class="md-card-head">
-      <h2>{{ icon('history', 'Latest sessions') }}</h2>
-      <a class="md-icon-btn" href="{{ url_for('history', days=days) }}">{{ icon('chevron_right', 'All sessions') }}</a>
+  <section>
+    <div class="head">
+      <h2 class="title">Sessions</h2>
+      <a href="{{ url_for('history', days=days) }}">All sessions</a>
     </div>
-    <ul class="md-list">
+    <ul class="list">
       {% for session in sessions %}
         <li>
           <div>
-            <div class="md-when">{{ session.started_at | when }}</div>
-            <div class="md-meta">
-              <span>{{ icon('battery_5_bar', 'Charge') }}{{ session.start_percent | pct }} → {{ session.end_percent | pct }}</span>
-              <span>{{ icon('electric_meter', 'Energy') }}{{ session.energy_kwh | kwh }}</span>
-              <span>{{ icon('payments', 'Cost') }}{{ session.actual_cost | kr }}</span>
+            <div class="when">{{ session.started_at | when }}</div>
+            {{ charge_bar(session.start_percent, session.end_percent) }}
+            <div class="detail">
+              {{ session.start_percent | pct }} to {{ session.end_percent | pct }},
+              {{ session.energy_kwh | kwh }} for {{ session.actual_cost | kr }}
             </div>
           </div>
-          <div class="md-end">{{ icon('savings', 'Saved') }}{{ session.savings | kr }}</div>
+          <div class="saved"><strong>{{ session.savings | kr }}</strong><span>saved</span></div>
         </li>
       {% endfor %}
     </ul>
   </section>
 {% endif %}
 
-</div>
-
 <script>
-  // "Last checked 2 min ago" is true when the page renders and a lie five
-  // minutes later. On a desktop tab that is harmless; on a phone left on the
-  // home screen it reads as the scheduler having died, which is the one thing
-  // this screen exists to disprove.
+  // "Checked 2 min ago" is true when the page renders and a lie five minutes
+  // later. On a phone left on the home screen it reads as the scheduler having
+  // died, which is the one thing this screen exists to disprove.
   //
   // Only while the page is actually visible, so a backgrounded tab is not
   // reloading all night. Mirrors app.POLL_SECONDS - there is no point

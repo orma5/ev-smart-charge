@@ -1,15 +1,16 @@
 {% extends "base.html" %}
 {% set page = 'settings' %}
+{% from "macros.html" import icon %}
 
 {% block content %}
 
-<h2>Settings</h2>
+<section>
+  <div class="head"><h1 class="title">Settings</h1></div>
 
-{% if saved %}
-  <div class="panel"><p class="note">Saved. The next run picks these up within four minutes.</p></div>
-{% endif %}
+  {% if saved %}
+    <p class="notice">{{ icon('check') }}<span>Saved. The next run picks these up within four minutes.</span></p>
+  {% endif %}
 
-<div class="panel">
   <form method="post">
     <label class="field">
       <span class="label">Smart charging</span>
@@ -55,40 +56,43 @@
       {% if problems.charge_limit_percent %}<span class="error">{{ problems.charge_limit_percent }}</span>{% endif %}
     </label>
 
-    <button type="submit">Save</button>
+    <button type="submit" class="primary">Save</button>
   </form>
-</div>
 
-<details class="about">
-  <summary>What these do</summary>
+  {# The long explanations that used to sit under every field. Kept, because
+     "usually has no effect" is worth knowing, but folded away: on a phone they
+     were four fifths of the page and you scrolled past them every time. #}
+  <details class="about">
+    <summary>{{ icon('info') }}What these do</summary>
 
-  <p>
-    <strong>Smart charging</strong> off means the car is left alone and charges as soon
-    as it is plugged in. Nothing is recorded as saved while it is off.
-  </p>
-  <p>
-    <strong>Charger speed</strong> decides how many 15-minute slots a given amount of
-    charge needs, and prices the plug-in-and-go comparison the savings are measured
-    against.
-  </p>
-  <p>
-    <strong>Battery capacity</strong> turns a change in state of charge into
-    kilowatt-hours, which decides how long a charge will take and therefore how many
-    cheap slots it needs. For the savings figures it is now only a fallback: where the
-    charger metered a session itself, that measurement is used instead, and it reads
-    around a tenth higher because it counts the losses that never reach the battery.
-  </p>
-  <p>
-    <strong>Charge limit fallback</strong> usually has no effect. The car reports its
-    own target — the one set in the MyŠkoda app — and that wins whenever it is present.
-    This is only used on the rare runs where the car reports no target at all.
-  </p>
-  <p>
-    The price zone, the Skoda and Zaptec API details and the database connection are
-    not here on purpose: they are facts about how this is deployed rather than
-    preferences, and a text field that can break the car charging is not worth the
-    convenience.
-  </p>
-</details>
+    <p>
+      <strong>Smart charging</strong> off means the car is left alone and charges as soon
+      as it is plugged in. Nothing is recorded as saved while it is off.
+    </p>
+    <p>
+      <strong>Charger speed</strong> decides how many 15-minute slots a given amount of
+      charge needs, and prices the plug-in-and-go comparison the savings are measured
+      against.
+    </p>
+    <p>
+      <strong>Battery capacity</strong> turns a change in state of charge into
+      kilowatt-hours, which decides how long a charge will take and therefore how many
+      cheap slots it needs. For the savings figures it is now only a fallback: where the
+      charger metered a session itself, that measurement is used instead, and it reads
+      around a tenth higher because it counts the losses that never reach the battery.
+    </p>
+    <p>
+      <strong>Charge limit fallback</strong> usually has no effect. The car reports its
+      own target — the one set in the MyŠkoda app — and that wins whenever it is present.
+      This is only used on the rare runs where the car reports no target at all.
+    </p>
+    <p>
+      The price zone, the Skoda and Zaptec API details and the database connection are
+      not here on purpose: they are facts about how this is deployed rather than
+      preferences, and a text field that can break the car charging is not worth the
+      convenience.
+    </p>
+  </details>
+</section>
 
 {% endblock %}
