@@ -35,7 +35,7 @@ ENV PATH="/app/.venv/bin:$PATH"
 # The application. Listed file by file rather than `COPY . .` so that a stray
 # .env - which exists in local development and holds the API key - cannot be
 # baked into an image that gets pushed to the registry.
-COPY main.py db.py savings.py web.py app.py schema.sql ./
+COPY main.py zaptec.py db.py savings.py web.py app.py schema.sql ./
 COPY templates ./templates
 
 # Served by waitress from inside app.py, alongside the scheduler thread.
