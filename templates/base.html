@@ -2,8 +2,26 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<!-- viewport-fit=cover lets the page paint under the iPhone home indicator, and
+     the bottom tab bar below pads itself back out with env(safe-area-inset-*).
+     Without it a standalone launch leaves a white band under the bar. -->
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>{% block title %}EV Smart Charge{% endblock %}</title>
+
+<!-- Added to the home screen this launches without browser chrome, which is the
+     whole of what "app feel" turned out to need: the layout was already
+     responsive and dark-mode aware. -->
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='apple-touch-icon.png') }}">
+<link rel="icon" href="{{ url_for('static', filename='icon-192.png') }}">
+<!-- iOS ignores the manifest and wants its own three. -->
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="EV Charge">
+<!-- Two, so the status bar follows the page into dark mode rather than staying
+     the light accent against a dark screen. -->
+<meta name="theme-color" content="#2f6f4f" media="(prefers-color-scheme: light)">
+<meta name="theme-color" content="#16171a" media="(prefers-color-scheme: dark)">
 <style>
   /* Tokens are defined on :root and only redefined for dark, so no colour has
      its single definition inside a media query. */
@@ -50,6 +68,8 @@
   nav { display: flex; gap: 1.25rem; }
   nav a { text-decoration: none; color: var(--muted); }
   nav a:hover, nav a.on { color: var(--ink); }
+  /* Desktop reads the labels; the icons are for the bottom bar below. */
+  nav svg { display: none; }
 
   main { max-width: 900px; margin: 0 auto; padding: 1.5rem; }
   h2 { font-size: 1rem; margin: 2rem 0 .75rem; }
@@ -102,15 +122,78 @@
     border: 1px solid var(--accent); background: var(--accent); color: var(--panel);
     cursor: pointer;
   }
+
+  /* --- Phone -------------------------------------------------------------
+     The layout was already responsive; what it was not was reachable. Links
+     in a top bar are the furthest point from a thumb on a 6" screen, and the
+     desktop spacing wastes a third of the viewport before the first number.
+     Below this width the nav moves to the bottom as tabs and the padding
+     tightens. 560px rather than a device size: it is where the four headline
+     figures stop fitting two-up. */
+  @media (max-width: 560px) {
+    header { padding: .85rem 1rem; }
+    main { padding: 1rem; padding-bottom: calc(72px + env(safe-area-inset-bottom)); }
+    h2 { margin: 1.5rem 0 .6rem; }
+    .panel { padding: .9rem 1rem; border-radius: 10px; }
+
+    /* Two up rather than a wrapping flex row, so the figures line up in a
+       grid instead of drifting by label length. */
+    .figures { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+    .figure .value { font-size: 1.35rem; }
+    .figure .value.big { font-size: 1.9rem; }
+    /* The savings headline gets the full width; it is the one number anyone
+       opens this to see. */
+    .figures .figure:first-child:has(.big) { grid-column: 1 / -1; }
+
+    /* Fixed 300px overflowed a 360px-wide phone once the panel had padding. */
+    .strip { width: 100%; max-width: 100%; }
+
+    nav {
+      position: fixed; left: 0; right: 0; bottom: 0; z-index: 10;
+      gap: 0;
+      background: var(--panel);
+      border-top: 1px solid var(--line);
+      padding-bottom: env(safe-area-inset-bottom);
+    }
+    nav a {
+      flex: 1;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: .15rem;
+      /* 56px, comfortably past the 44px minimum touch target. */
+      min-height: 56px;
+      font-size: .7rem;
+      /* Stops the grey flash on tap reading as a broken link. */
+      -webkit-tap-highlight-color: transparent;
+    }
+    nav a.on { color: var(--accent); }
+    nav svg { display: block; width: 22px; height: 22px; fill: none;
+              stroke: currentColor; stroke-width: 1.8;
+              stroke-linecap: round; stroke-linejoin: round; }
+  }
 </style>
 </head>
 <body>
 <header>
   <h1><a href="{{ url_for('overview') }}">EV Smart Charge</a></h1>
+  <!-- Inline SVG rather than an icon font or a sprite, for the same reason the
+       charts are hand-built: three glyphs do not justify a dependency on a LAN
+       application that has to work when the internet does not. Hidden entirely
+       above the phone breakpoint, where the labels do the work. -->
   <nav>
-    <a href="{{ url_for('overview') }}" {% if page == 'overview' %}class="on"{% endif %}>Overview</a>
-    <a href="{{ url_for('history') }}" {% if page == 'history' %}class="on"{% endif %}>History</a>
-    <a href="{{ url_for('settings_page') }}" {% if page == 'settings' %}class="on"{% endif %}>Settings</a>
+    <a href="{{ url_for('overview') }}" {% if page == 'overview' %}class="on"{% endif %}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12l9-8 9 8"/><path d="M5 10v10h14V10"/></svg>
+      Overview
+    </a>
+    <a href="{{ url_for('history') }}" {% if page == 'history' %}class="on"{% endif %}>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+      History
+    </a>
+    <a href="{{ url_for('settings_page') }}" {% if page == 'settings' %}class="on"{% endif %}>
+      <!-- Sliders rather than a cog: at 22px a cog's teeth collapse into a
+           circle with spikes, which reads as a brightness icon. -->
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M4 12h16M4 17h16"/><circle cx="9" cy="7" r="2"/><circle cx="15" cy="12" r="2"/><circle cx="8" cy="17" r="2"/></svg>
+      Settings
+    </a>
   </nav>
 </header>
 <main>{% block content %}{% endblock %}</main>

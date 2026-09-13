@@ -112,4 +112,22 @@
   <a href="{{ url_for('overview', days=90) }}">90</a>
 </p>
 
+<script>
+  // "Last checked 2 min ago" is true when the page renders and a lie five
+  // minutes later. On a desktop tab that is harmless; on a phone left on the
+  // home screen it reads as the scheduler having died, which is the one thing
+  // this screen exists to disprove.
+  //
+  // Only while the page is actually visible, so a backgrounded tab is not
+  // reloading all night. Mirrors app.POLL_SECONDS - there is no point
+  // refreshing faster than the thing being reported changes.
+  (function () {
+    setInterval(function () {
+      if (document.visibilityState === "visible") {
+        location.reload();
+      }
+    }, 240000);
+  })();
+</script>
+
 {% endblock %}

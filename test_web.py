@@ -5,6 +5,7 @@ These render the real templates through Flask's test client rather than
 asserting on view-function return values. A Jinja typo is the most likely way
 this breaks, and it is invisible to any test that stops short of rendering.
 """
+import json
 from datetime import datetime, timedelta
 
 import pytest
@@ -101,6 +102,60 @@ def test_the_overview_says_when_energy_is_an_estimate(client):
 
     assert "charger's own meter" in body
     assert "estimated" in body
+
+
+# --- Installable on a phone -------------------------------------------------
+
+def test_the_manifest_is_served_and_parses(client):
+    """
+    A malformed manifest does not break a page - the browser silently declines
+    to offer "add to home screen" and nothing says why. Parsing it here is the
+    only thing that would notice.
+    """
+    response = client.get("/static/manifest.json")
+
+    assert response.status_code == 200
+
+    manifest = json.loads(response.get_data(as_text=True))
+    assert manifest["start_url"] == "/"
+    assert manifest["display"] == "standalone"
+    # Chrome wants both sizes before it will treat the app as installable.
+    assert {icon["sizes"] for icon in manifest["icons"]} == {"192x192", "512x512"}
+
+
+def test_the_icons_the_manifest_promises_exist(client):
+    """
+    The manifest naming an icon that 404s is the same silent failure. These
+    are separate files copied separately into the image, so the reference and
+    the file can drift apart without anything complaining.
+    """
+    manifest = json.loads(client.get("/static/manifest.json").get_data(as_text=True))
+
+    for icon in manifest["icons"]:
+        assert client.get(icon["src"]).status_code == 200, icon["src"]
+
+    # iOS ignores the manifest entirely and looks for this one by convention.
+    assert client.get("/static/apple-touch-icon.png").status_code == 200
+
+
+def test_every_page_links_the_manifest_and_the_ios_icon(client):
+    for path in ("/", "/history", "/settings"):
+        body = client.get(path).get_data(as_text=True)
+
+        assert 'rel="manifest"' in body, path
+        assert 'rel="apple-touch-icon"' in body, path
+        assert 'name="apple-mobile-web-app-capable"' in body, path
+
+
+def test_the_overview_refreshes_itself(client):
+    """
+    Left on a home screen this page would otherwise claim "2 min ago" all
+    night, which reads as the scheduler having died.
+    """
+    body = client.get("/").get_data(as_text=True)
+
+    assert "location.reload()" in body
+    assert "visibilityState" in body
 
 
 def test_the_history_page_renders_sessions_and_runs(client):

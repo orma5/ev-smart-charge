@@ -37,6 +37,10 @@ ENV PATH="/app/.venv/bin:$PATH"
 # baked into an image that gets pushed to the registry.
 COPY main.py zaptec.py db.py savings.py web.py app.py schema.sql ./
 COPY templates ./templates
+# The PWA icons and manifest. Missing these does not crash the pod the way a
+# missing module does - the pages render fine and the app simply stops being
+# installable, which is a good deal harder to notice.
+COPY static ./static
 
 # Served by waitress from inside app.py, alongside the scheduler thread.
 EXPOSE 8000
