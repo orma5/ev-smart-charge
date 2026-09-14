@@ -10,9 +10,10 @@ browser tab stop the car from charging. Every screen reads Postgres only.
 Charts are inline SVG generated here rather than drawn by a charting library.
 Three screens of bars did not justify a build step or a package.json.
 """
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 
 from flask import Flask, redirect, render_template, request, url_for
+from flask.json.provider import DefaultJSONProvider
 from markupsafe import Markup
 
 import db
@@ -120,6 +121,20 @@ def _when(moment):
     return DASH if moment is None else f"{moment:%a %d %b, %H:%M}"
 
 
+class _JSONProvider(DefaultJSONProvider):
+    """
+    Dates as ISO 8601 with no offset. Flask's default writes them as RFC 822
+    dates marked GMT, and these are naive Stockholm times: a client believing
+    the label would shift every one of them by an hour or two.
+    """
+
+    @staticmethod
+    def default(o):
+        if isinstance(o, date):
+            return o.isoformat()
+        return DefaultJSONProvider.default(o)
+
+
 def _ago(moment):
     """Relative, for the one place it is the question being asked: liveness."""
     if moment is None:
@@ -143,6 +158,7 @@ def create_app(config):
     config, and so nothing connects to Postgres at import time.
     """
     app = Flask(__name__)
+    app.json = _JSONProvider(app)
     app.jinja_env.filters.update(
         kr=_kr, kwh=_kwh, pct=_pct, when=_when, ago=_ago,
         decision=lambda value: DECISIONS.get(value, value),
@@ -229,7 +245,92 @@ def create_app(config):
                 saved="saved" in request.args,
             )
 
+    # --- JSON, for the mobile app -------------------------------------------
+    # The screens above as data. Postgres only, for the same reason they are:
+    # nothing a client asks for may spend the scheduler's Skoda budget.
+
+    @app.route("/api/overview")
+    def api_overview():
+        days, since = period()
+        with db.connect(config) as conn:
+            sessions = _sessions(conn, config, since)
+            latest = db.latest_run(conn)
+            reading = db.latest_reading(conn)
+            settings = db.load_settings(conn)
+
+        return {
+            "days": days,
+            "latest": _api_run(latest),
+            "reading": _api_run(reading),
+            "settings": settings,
+            "totals": _totals(sessions),
+            "daily_savings": [
+                {"day": day, "savings": value} for day, value in daily_savings(sessions)
+            ],
+            "sessions": list(reversed(sessions))[:5],
+        }
+
+    @app.route("/api/history")
+    def api_history():
+        days, since = period()
+        with db.connect(config) as conn:
+            sessions = _sessions(conn, config, since)
+            prices = savings.by_slot(db.load_prices(conn, config["PRICE_ZONE"], since))
+            runs = db.load_runs(conn, since)
+
+        return {
+            "days": days,
+            "sessions": [
+                {**session, "strip": session_strip(session, prices)}
+                for session in reversed(sessions)
+            ],
+            "recent": [
+                {
+                    **row,
+                    "decision_label": DECISIONS.get(row["decision"], row["decision"]),
+                    "decision_icon": DECISION_ICONS.get(row["decision"], "help"),
+                }
+                for row in collapse_runs(runs)[:60]
+            ],
+        }
+
+    @app.route("/api/settings", methods=["GET", "PUT"])
+    def api_settings():
+        with db.connect(config) as conn:
+            if request.method == "GET":
+                return db.load_settings(conn)
+
+            # parse_settings reads a form: every value a string, the toggle
+            # present only when on. Passed through as JSON, a departure hour of
+            # 0 would read as blank.
+            body = request.get_json(silent=True) or {}
+            form = {name: str(body.get(name, "")) for name in FIELDS}
+            if body.get("smart_charging_enabled"):
+                form["smart_charging_enabled"] = "on"
+
+            settings, problems = parse_settings(form)
+            if problems:
+                return {"settings": settings, "problems": problems}, 422
+            db.save_settings(conn, settings)
+            return settings
+
     return app
+
+
+def _api_run(run):
+    """The fields of one run the app shows, with its decision in words."""
+    if run is None:
+        return None
+    return {
+        "at": run["at"],
+        "decision": run["decision"],
+        "decision_label": DECISIONS.get(run["decision"], run["decision"]),
+        "decision_icon": DECISION_ICONS.get(run["decision"], "help"),
+        "charging_state": run["charging_state"],
+        "battery_percent": run["battery_percent"],
+        "target_percent": run["target_percent"],
+        "error": run["error"],
+    }
 
 
 def _sessions(conn, config, since):
@@ -357,18 +458,24 @@ def parse_settings(form):
 # Plain SVG built as strings. Colours come from CSS custom properties so the
 # charts follow the page into dark mode instead of needing a second palette.
 
-def daily_savings_chart(sessions, width=760, height=120):
-    """Savings per day across the window, one bar per day that had a session."""
+def daily_savings(sessions):
+    """(day, kronor) for each day that had a priced session, oldest first."""
     by_day = {}
     for session in sessions:
         if session["savings"] is not None:
             day = session["started_at"].date()
             by_day[day] = by_day.get(day, 0.0) + session["savings"]
+    return sorted(by_day.items())
+
+
+def daily_savings_chart(sessions, width=760, height=120):
+    """Savings per day across the window, one bar per day that had a session."""
+    by_day = dict(daily_savings(sessions))
 
     if not by_day:
         return None
 
-    days = sorted(by_day)
+    days = list(by_day)
     top = max(max(by_day.values()), 0.01)
     pad_bottom, pad_top = 1, 8
     plot = height - pad_bottom - pad_top
@@ -422,27 +529,25 @@ def session_chart(session, prices, width=300, height=44):
     This is the picture that answers "why did it charge then" - the cheap
     slots are visibly the short ones, and the highlights should sit on them.
     """
-    window = _session_slots(session)
-    priced = [(slot, prices.get(slot)) for slot in window]
-    known = [price for _, price in priced if price is not None]
+    strip = session_strip(session, prices)
 
-    if not known:
+    if strip is None:
         return None
 
-    top = max(max(known), 0.01)
-    charged = set(session["charging_slots"])
-    step = width / len(priced)
+    top = max(max(s["price"] for s in strip if s["price"] is not None), 0.01)
+    step = width / len(strip)
     bar = max(1.0, step - 0.6)
 
     parts = [
         f'<svg viewBox="0 0 {width} {height}" preserveAspectRatio="none" class="strip" role="img"'
         f' aria-label="Price per slot, with charging slots highlighted">'
     ]
-    for index, (slot, price) in enumerate(priced):
+    for index, s in enumerate(strip):
+        slot, price = s["slot"], s["price"]
         if price is None:
             continue
         tall = max(1.0, height * price / top)
-        css = "slot charged" if slot in charged else "slot"
+        css = "slot charged" if s["charged"] else "slot"
         parts.append(
             f'<rect x="{index * step:.2f}" y="{height - tall:.2f}" width="{bar:.2f}"'
             f' height="{tall:.2f}" class="{css}">'
@@ -450,6 +555,20 @@ def session_chart(session, prices, width=300, height=44):
         )
     parts.append("</svg>")
     return Markup("".join(parts))
+
+
+def session_strip(session, prices):
+    """
+    Every slot of a session with its price and whether it charged, or None
+    when none of them is priced. The data behind session_chart, which the app
+    draws itself.
+    """
+    charged = set(session["charging_slots"])
+    strip = [
+        {"slot": slot, "price": prices.get(slot), "charged": slot in charged}
+        for slot in _session_slots(session)
+    ]
+    return strip if any(s["price"] is not None for s in strip) else None
 
 
 def _session_slots(session):

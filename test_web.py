@@ -437,3 +437,105 @@ def test_a_decimal_comma_is_accepted():
 
     assert problems == {}
     assert settings["charger_speed_kw"] == 7.4
+
+
+# --- JSON API, for the mobile app -------------------------------------------
+
+def test_the_api_overview_reports_what_was_saved(client):
+    """The same 12.30 kr the overview page shows, as a number."""
+    body = client.get("/api/overview").get_json()
+
+    assert body["totals"]["savings"] == pytest.approx(12.30)
+    assert body["latest"]["decision_label"] == "Not plugged in"
+    assert body["latest"]["decision_icon"] == "power_off"
+    assert body["reading"]["battery_percent"] == 80
+    assert len(body["sessions"]) == 1
+
+
+def test_api_times_are_local_iso_not_gmt(client):
+    """
+    Flask's default writes these as RFC 822 dates marked GMT. They are naive
+    Stockholm times, so a phone believing that label would be an hour or two out.
+    """
+    body = client.get("/api/overview").get_json()
+
+    assert body["latest"]["at"] == "2026-08-31T07:00:00"
+    assert body["daily_savings"][0]["day"] == "2026-08-30"
+
+
+def test_the_api_overview_survives_an_empty_database(monkeypatch, client):
+    monkeypatch.setattr(db, "load_runs", lambda conn, since: [])
+    monkeypatch.setattr(db, "load_prices", lambda conn, zone, since: [])
+    monkeypatch.setattr(db, "latest_run", lambda conn: None)
+    monkeypatch.setattr(db, "latest_reading", lambda conn: None)
+
+    body = client.get("/api/overview").get_json()
+
+    assert body["latest"] is None
+    assert body["reading"] is None
+    assert body["sessions"] == []
+    assert body["daily_savings"] == []
+
+
+def test_the_api_history_carries_each_sessions_price_strip(client):
+    """The app draws the strip itself, so it needs which slots were charged in."""
+    body = client.get("/api/history").get_json()
+
+    strip = body["sessions"][0]["strip"]
+    assert sum(slot["charged"] for slot in strip) == 3
+    assert body["recent"][0]["decision_label"] == "Not plugged in"
+
+
+def test_an_unpriced_session_has_no_strip_in_the_api(monkeypatch, client):
+    monkeypatch.setattr(db, "load_prices", lambda conn, zone, since: [])
+
+    body = client.get("/api/history").get_json()
+
+    assert body["sessions"][0]["strip"] is None
+
+
+def test_the_api_returns_the_settings(client):
+    assert client.get("/api/settings").get_json() == SETTINGS
+
+
+def test_putting_valid_settings_saves_them(monkeypatch, client):
+    """
+    Departure at midnight is hour 0, which a form parser handed JSON numbers
+    unconverted would read as blank.
+    """
+    saved = []
+    monkeypatch.setattr(db, "save_settings", lambda conn, settings: saved.append(settings))
+
+    response = client.put("/api/settings", json={
+        "departure_hour": 0,
+        "charger_speed_kw": 7.4,
+        "battery_capacity_kwh": 82,
+        "charge_limit_percent": 90,
+        "smart_charging_enabled": False,
+    })
+
+    assert response.status_code == 200
+    assert saved == [{
+        "departure_hour": 0,
+        "charger_speed_kw": 7.4,
+        "battery_capacity_kwh": 82.0,
+        "charge_limit_percent": 90,
+        "smart_charging_enabled": False,
+    }]
+
+
+def test_putting_an_out_of_range_value_is_rejected_without_saving(monkeypatch, client):
+    saved = []
+    monkeypatch.setattr(db, "save_settings", lambda conn, settings: saved.append(settings))
+
+    response = client.put("/api/settings", json={
+        "departure_hour": 25,
+        "charger_speed_kw": 11,
+        "battery_capacity_kwh": 82,
+        "charge_limit_percent": 80,
+        "smart_charging_enabled": True,
+    })
+
+    assert response.status_code == 422
+    assert "must be between 0 and 23" in response.get_json()["problems"]["departure_hour"]
+    assert saved == []
