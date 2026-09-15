@@ -10,10 +10,9 @@ browser tab stop the car from charging. Every screen reads Postgres only.
 Charts are inline SVG generated here rather than drawn by a charting library.
 Three screens of bars did not justify a build step or a package.json.
 """
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 
 from flask import Flask, redirect, render_template, request, url_for
-from flask.json.provider import DefaultJSONProvider
 from markupsafe import Markup
 
 import db
@@ -121,20 +120,6 @@ def _when(moment):
     return DASH if moment is None else f"{moment:%a %d %b, %H:%M}"
 
 
-class _JSONProvider(DefaultJSONProvider):
-    """
-    Dates as ISO 8601 with no offset. Flask's default writes them as RFC 822
-    dates marked GMT, and these are naive Stockholm times: a client believing
-    the label would shift every one of them by an hour or two.
-    """
-
-    @staticmethod
-    def default(o):
-        if isinstance(o, date):
-            return o.isoformat()
-        return DefaultJSONProvider.default(o)
-
-
 def _ago(moment):
     """Relative, for the one place it is the question being asked: liveness."""
     if moment is None:
@@ -158,7 +143,6 @@ def create_app(config):
     config, and so nothing connects to Postgres at import time.
     """
     app = Flask(__name__)
-    app.json = _JSONProvider(app)
     app.jinja_env.filters.update(
         kr=_kr, kwh=_kwh, pct=_pct, when=_when, ago=_ago,
         decision=lambda value: DECISIONS.get(value, value),
@@ -245,92 +229,7 @@ def create_app(config):
                 saved="saved" in request.args,
             )
 
-    # --- JSON, for the mobile app -------------------------------------------
-    # The screens above as data. Postgres only, for the same reason they are:
-    # nothing a client asks for may spend the scheduler's Skoda budget.
-
-    @app.route("/api/overview")
-    def api_overview():
-        days, since = period()
-        with db.connect(config) as conn:
-            sessions = _sessions(conn, config, since)
-            latest = db.latest_run(conn)
-            reading = db.latest_reading(conn)
-            settings = db.load_settings(conn)
-
-        return {
-            "days": days,
-            "latest": _api_run(latest),
-            "reading": _api_run(reading),
-            "settings": settings,
-            "totals": _totals(sessions),
-            "daily_savings": [
-                {"day": day, "savings": value} for day, value in daily_savings(sessions)
-            ],
-            "sessions": list(reversed(sessions))[:5],
-        }
-
-    @app.route("/api/history")
-    def api_history():
-        days, since = period()
-        with db.connect(config) as conn:
-            sessions = _sessions(conn, config, since)
-            prices = savings.by_slot(db.load_prices(conn, config["PRICE_ZONE"], since))
-            runs = db.load_runs(conn, since)
-
-        return {
-            "days": days,
-            "sessions": [
-                {**session, "strip": session_strip(session, prices)}
-                for session in reversed(sessions)
-            ],
-            "recent": [
-                {
-                    **row,
-                    "decision_label": DECISIONS.get(row["decision"], row["decision"]),
-                    "decision_icon": DECISION_ICONS.get(row["decision"], "help"),
-                }
-                for row in collapse_runs(runs)[:60]
-            ],
-        }
-
-    @app.route("/api/settings", methods=["GET", "PUT"])
-    def api_settings():
-        with db.connect(config) as conn:
-            if request.method == "GET":
-                return db.load_settings(conn)
-
-            # parse_settings reads a form: every value a string, the toggle
-            # present only when on. Passed through as JSON, a departure hour of
-            # 0 would read as blank.
-            body = request.get_json(silent=True) or {}
-            form = {name: str(body.get(name, "")) for name in FIELDS}
-            if body.get("smart_charging_enabled"):
-                form["smart_charging_enabled"] = "on"
-
-            settings, problems = parse_settings(form)
-            if problems:
-                return {"settings": settings, "problems": problems}, 422
-            db.save_settings(conn, settings)
-            return settings
-
     return app
-
-
-def _api_run(run):
-    """The fields of one run the app shows, with its decision in words."""
-    if run is None:
-        return None
-    return {
-        "at": run["at"],
-        "decision": run["decision"],
-        "decision_label": DECISIONS.get(run["decision"], run["decision"]),
-        "decision_icon": DECISION_ICONS.get(run["decision"], "help"),
-        "charging_state": run["charging_state"],
-        "battery_percent": run["battery_percent"],
-        "target_percent": run["target_percent"],
-        "error": run["error"],
-    }
 
 
 def _sessions(conn, config, since):
@@ -560,8 +459,7 @@ def session_chart(session, prices, width=300, height=44):
 def session_strip(session, prices):
     """
     Every slot of a session with its price and whether it charged, or None
-    when none of them is priced. The data behind session_chart, which the app
-    draws itself.
+    when none of them is priced. The data behind session_chart.
     """
     charged = set(session["charging_slots"])
     strip = [
